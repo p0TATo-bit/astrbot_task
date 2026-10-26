@@ -1,5 +1,5 @@
 name: astrbot_task
-desc: "AstrBot 伴侣管家插件: 任务日程 / 长期记忆 / 情绪好感"
+desc: "能够管理日常活动、情绪陪伴和长期记忆的伴侣管家插件"
 version: v0.9.2
 author: teaskks
 repo: "https://github.com/p0TATo-bit/astrbot_task"
