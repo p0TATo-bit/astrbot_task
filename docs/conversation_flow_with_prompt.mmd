@@ -1,0 +1,123 @@
+flowchart TD
+    %% ============ 样式定义 ============
+    classDef user fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef astrbot fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef hook fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+    classDef prompt fill:#fce4ec,stroke:#c2185b,stroke-width:2px;
+    classDef bg fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px;
+    classDef data fill:#f1f8e9,stroke:#558b2f,stroke-width:2px;
+    classDef ext fill:#fafafa,stroke:#9e9e9e,stroke-width:1px,stroke-dasharray: 5 5;
+
+    %% ============ 入口 ============
+    U[("用户消息\nAstrMessageEvent")]:::user --> EB{EventBus 分发}
+
+    %% ============ AstrBot 核心: 构建请求 ============
+    subgraph AstrBot_Build[AstrBot 核心: 构建 LLM 请求]
+        direction TB
+        EB --> PROV[Provider 管理\n(模型/参数/人格)]:::astrbot
+        PROV --> PERSONA[面板人格 System Prompt\n(用户在 AstrBot 面板配置的任意人格)]:::prompt
+        PERSONA --> HIST[对话历史\n最近 N 轮]:::astrbot
+        HIST --> REQ[LLMRequest 对象\nsystem_prompt + messages]:::astrbot
+    end
+
+    %% ============ 插件钩子: on_llm_request (核心注入点) ============
+    subgraph Plugin_Hook[astrbot_task.on_llm_request 钩子注入]
+        direction TB
+        
+        REQ -.->|on_llm_request 拦截| HOOK[TaskPlugin.on_llm_request\nmain.py:378]:::hook
+        
+        %% 三段上下文并行准备
+        HOOK --> EMOTION[emotion.build_context()\nemotion.py:146\n自然语言情绪描述]:::prompt
+        HOOK --> MEMORY[associative_recall()\nmemory.py:187\nIDF+多跳+情绪重排 Top-5]:::prompt
+        HOOK --> TIME[now_str()\nmain.py:36\n当前时间 YYYY-MM-DD HH:MM 星期X]:::prompt
+        
+        %% 拼接
+        EMOTION --> INJECT[三段拼接\n"\n\n".join(parts)]:::prompt
+        MEMORY --> INJECT
+        TIME --> INJECT
+        
+        %% 追加到 system_prompt (关键: 追加不替换)
+        INJECT --> APPEND[req.system_prompt +=\n\n情绪\n\n记忆\n\n时间]:::prompt
+        APPEND --> REQ
+    end
+
+    %% ============ 最终发给模型 ============
+    subgraph LLM_Call[大模型调用]
+        direction TB
+        REQ -->|system_prompt = 人格+情绪+记忆+时间| PROVIDER[astrbot.api.provider\nLLMGenerate]:::astrbot
+        PROVIDER --> API[大模型 API\nNVIDIA / OpenAI 兼容]:::ext
+        API --> RESP[模型回复\ncompletion_text]:::ext
+        RESP --> OUT[发回用户]:::astrbot
+    end
+
+    %% ============ 后台异步四类 LLM 调用 (走 _llm_call 代理) ============
+    subgraph Background_LLM[后台异步 LLM 调用 (不阻塞主流程)]
+        direction TB
+        
+        %% 1. 意图分析
+        subgraph Intent[1. 意图分析 _intent_call (每轮)]
+            direction TB
+            I_TRIG[on_llm_request 同步触发 create_task]:::bg
+            I_TRIG --> I_CALL[_llm_call(prompt, system)\nmain.py:393\n8.5s 超时]:::bg
+            I_CALL --> I_PARSE{解析 JSON}:::bg
+            I_PARSE -->|recall[]| I_RECALL[检索词列表 3-5个]:::prompt
+            I_PARSE -->|emotion{}| I_EMO[情绪微调量 ±0.08]:::prompt
+            I_RECALL -.->|下轮召回用| MEMORY
+            I_EMO -.->|apply_adjust cap=0.08| EMOTION_ENG[EmotionEngine]:::data
+        end
+        
+        %% 2. 周期总结
+        subgraph Summary[2. 周期总结 periodic_summary (每 20 轮)]
+            direction TB
+            S_TRIG[轮数计数 >= 20]:::bg
+            S_TRIG --> S_CALL[_llm_call(总结提示词)\nmemory.py:404\n30s 超时]:::bg
+            S_CALL --> S_PARSE{解析 JSON}:::bg
+            S_PARSE --> S_SUM[summary → summaries 表]:::data
+            S_PARSE --> S_FACT[facts[] → memories 表\nimportance≥4 晋升金环]:::data
+        end
+        
+        %% 3. 情绪校准
+        subgraph Calib[3. 情绪校准 (每 10 轮)]
+            direction TB
+            C_TRIG[轮数计数 % 10 == 0]:::bg
+            C_TRIG --> C_CALL[_llm_call(校准提示词)\ncap=0.15]:::bg
+            C_CALL --> C_PARSE{解析 JSON}:::bg
+            C_PARSE -->|adj ±0.15| EMOTION_ENG
+        end
+        
+        %% 4. 推送口吻
+        subgraph Push[4. 推送口吻 persona_notify / _gen_plan]
+            direction TB
+            P_TRIG[scheduler tick\n提醒/主动关心/计划]:::bg
+            P_TRIG --> P_CALL[_llm_call(人格+事实)\n30s 超时]:::bg
+            P_CALL --> P_TEXT[纯文本推送]:::astrbot
+            P_TEXT --> SEND[context.send_message]:::astrbot
+        end
+    end
+
+    %% ============ 数据层 ============
+    subgraph Data_Layer[SQLite 数据层 (data.db)]
+        direction TB
+        DB_TASKS[(tasks\n+ task_occurrence_completions)]:::data
+        DB_MEM[(memories\n+ summaries)]:::data
+        DB_EMO[(emotion\nstate_json/relation_json\n+ emotion_log)]:::data
+        DB_CFG[(config\n运行时配置覆盖)]:::data
+    end
+
+    %% ============ 数据连线 ============
+    MEMORY -.->|读/写| DB_MEM
+    EMOTION -.->|读| DB_EMO
+    EMOTION_ENG -.->|读/写| DB_EMO
+    TASKS[任务工具 CRUD] -.->|读/写| DB_TASKS
+    SCHED[scheduler] -.->|读任务/写提醒| DB_TASKS
+
+    %% ============ 关键提示词流向标注 ============
+    PERSONA -.->|原人格不变| APPEND
+    APPEND -.->|最终 system_prompt| REQ
+    
+    %% 箭头标注提示词流向
+    PROMPT_FLOW[每轮注入的三段上下文]:::prompt
+    EMOTION --> PROMPT_FLOW
+    MEMORY --> PROMPT_FLOW
+    TIME --> PROMPT_FLOW
+    PROMPT_FLOW --> APPEND

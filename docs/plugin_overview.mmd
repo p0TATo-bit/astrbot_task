@@ -1,0 +1,144 @@
+flowchart TD
+  %% ============ 入口 ============
+  IN_MSG["QQ 消息<br/>官方机器人适配器"]:::ext --> P1
+  IN_CMD["/任务 指令<br/>列表/添加/完成/删除/好感<br/>不走 LLM"]:::ext -.-> D_TASKS
+  IN_SCHED["定时器<br/>每分钟 tick"]:::ext --> S_HUB
+  IN_WEB["WebUI :6187<br/>独立线程 · 七页(含监控)"]:::ext -.-> D_DATA
+
+  %% ============ 消息管线 ============
+  subgraph PIPE["消息管线 —— 一条消息的旅程"]
+    direction TB
+    P1["① on_any_message 全消息监听<br/>情绪规则触发 + ×0.92 衰减<br/>用户历史 20 条 · 轮数+1"]:::plugin
+    P2["② AstrBot 构建请求<br/>system_prompt = 面板人格 + 对话历史"]:::host
+    P3["③ on_llm_request 注入四段<br/>识图 ≤3张(NVIDIA视觉模型)<br/>两阶段召回: _intent_call 9s → 检索词3~5个 + 情绪微调±0.08<br/>→ 扩散召回 Top6(失败降级原文 Top5)<br/>情绪情境 + 当前时间"]:::plugin
+    P4["④ LLM 生成回复<br/>可发起工具调用"]:::host
+    P5["⑤ 工具执行<br/>宿主路由到插件 llm_tool"]:::plugin
+    P6["⑥ on_llm_response<br/>回复入历史 20 条<br/>后台自动提取 importance≥4"]:::plugin
+    P7["⑦ 回复发给主人"]:::host
+    P1 --> P2 --> P3 --> P4 --> P5 --> P6 --> P7
+  end
+
+  %% ============ 工具层 ============
+  subgraph TOOLS["工具层 12 个(模型自主调用)"]
+    direction LR
+    T_CREATE["create_task<br/>循环+recurrence_end+end_time<br/>时间冲突自动拦截(force越权)"]:::tool
+    T_CREATES["create_tasks<br/>批量≤40 课程表"]:::tool
+    T_UPDATE["update_task<br/>部分字段"]:::tool
+    T_LIST["list_tasks<br/>未完成≤30 防重复"]:::tool
+    T_DONE["complete_task<br/>循环=打卡当天(可逆)<br/>整体完成需确认"]:::tool
+    T_DEL["delete_task<br/>二次确认 5min"]:::tool
+    T_STORE["store_memory<br/>双向前缀 upsert"]:::tool
+    T_SEARCH["search_memory<br/>扩散召回≤8"]:::tool
+    T_WEB["web_search<br/>Bing 前6条"]:::tool
+    T_OPEN["open_url<br/>正文≤4000字"]:::tool
+    T_TIME["current_time<br/>时间推理基准"]:::tool
+    T_REMIND["set_reminder<br/>一次性提醒"]:::tool
+  end
+  P5 -.-> T_CREATE
+  T_STORE -.-> BG_KW
+
+  %% ============ 后台 LLM 任务 ============
+  subgraph BG["后台 LLM 任务(统一走管理模型 admin_provider_id, 可配 · 线程池 · 不阻塞回复)"]
+    direction TB
+    BG_INTENT["意图分析(每轮)<br/>recall 3~5词 + 情绪微调<br/>9s 超时降级单路"]:::bg
+    BG_SUM["周期总结(每 20 轮)<br/>双方各 20 条 → 第一人称总结<br/>facts 评估参数回灌"]:::bg
+    BG_EXTRACT["自动提取(每轮回复后)<br/>importance≥4 才入库"]:::bg
+    BG_KW["关键词精修(存记忆后)<br/>规则 6 词 → AI 修"]:::bg
+    BG_NOTIFY["推送口吻生成<br/>失败回退固定模板"]:::bg
+  end
+  P3 -.-> BG_INTENT
+  P1 -. "满 20 轮" .-> BG_SUM
+  P6 -.-> BG_EXTRACT
+
+  %% ============ 记忆回路 ============
+  subgraph MEMLOOP["记忆回路 —— 关键词关联 × 情绪加权"]
+    direction TB
+    M_STORE["写入: store_memory / 自动提取≥4 / 总结 facts<br/>双向前缀 upsert(30字互含=升级覆盖)<br/>关键词: 规则6词 → AI 精修"]:::mem
+    M_SEED["召回种子: 查询命中关键词(IDF 1+ln N/df)<br/>正文子串兜底"]:::mem
+    M_HOP["多跳扩散: 沿共享关键词 2 跳 ×0.5<br/>旧记忆被联想激活"]:::mem
+    M_MOOD["情绪一致性重排<br/>低落: 同向×1.2 反向×0.85 → Top6 注入"]:::mem
+    M_GAIN["再巩固与权重<br/>access+1<br/>权重 = importance × 45天半衰 × 访问≤1.5 × (1+0.5×intensity)"]:::mem
+    M_PIN["金环晋升: access 满 5 → pinned<br/>召回加成 + 逐出保护"]:::mem
+    M_STORE --> M_SEED --> M_HOP --> M_MOOD --> M_GAIN --> M_PIN
+  end
+  T_STORE -.-> M_STORE
+  BG_SUM -.-> M_STORE
+  BG_EXTRACT -.-> M_STORE
+  P3 -.-> M_SEED
+
+  %% ============ 情绪回路 ============
+  subgraph EMOLOOP["情绪 —— 影响记忆权重与语气"]
+    direction TB
+    E_RULES["触发: 六条规则(夸/骂/谢/共情/完成/深夜)<br/>intent 情绪微调 ±0.08"]:::emo
+    E_STATE["状态层: PAD+fatigue/frustration<br/>×0.92 向基线衰减 · 落 emotion_log"]:::emo
+    E_REL["关系层: trust/task_liking/social_liking<br/>无上限 · 满1=羁绊金条"]:::emo
+    E_CTX["语气: build_context 自然语言<br/>严禁报数值"]:::emo
+    E_RULES --> E_STATE
+    E_RULES --> E_REL
+    E_STATE --> E_CTX
+  end
+  P1 -.-> E_RULES
+  E_STATE -.-> M_MOOD
+  E_STATE -.-> M_GAIN
+  E_REL -.-> D_EMO
+  E_STATE -.-> D_EMO
+
+  %% ============ 主动推送 ============
+  subgraph PUSH["主动推送(scheduler 每分钟)"]
+    direction TB
+    S_HUB["scheduler.tick()"]:::push
+    S_REMIND["到点提醒<br/>ai_reminders"]:::push
+    S_NEAR["临近开始<br/>45 分钟窗口"]:::push
+    S_OVER["过期汇总<br/>非循环 · 带冷却"]:::push
+    S_PRO["主动关心<br/>时段10~21 · 日上限 · 间隔 · 同主题每日一次<br/>随机触发: 概率=基础×(1+min(2,三好感之和)/2) 好感越高越爱找你<br/>附带沉默时长(距上次发言X小时/天)"]:::push
+    S_PLAN["计划推送<br/>每日 08:00 / 周一 09:00"]:::push
+    S_BACKUP["自动备份<br/>03:00 + 启动 · 留 7 份"]:::push
+    S_OUT["push 出口<br/>owner_umo 或最近会话"]:::push
+    S_HUB --> S_REMIND
+    S_HUB --> S_NEAR
+    S_HUB --> S_OVER
+    S_HUB --> S_PRO
+    S_HUB --> S_PLAN
+    S_HUB --> S_BACKUP
+    S_REMIND --> S_OUT
+    S_NEAR --> S_OUT
+    S_OVER --> S_OUT
+    S_PRO --> S_OUT
+    S_PLAN --> S_OUT
+  end
+  BG_NOTIFY -.-> S_OUT
+
+  %% ============ 数据层 ============
+  subgraph DATA["数据层 data.db(SQLite)"]
+    direction LR
+    D_TASKS[("tasks<br/>+ task_occurrence_completions<br/>循环打卡 task_id+date 可逆")]:::data
+    D_MEM[("memories<br/>type/importance1-5/intensity/valence<br/>keywords/access_count/pinned 金环<br/>45天半衰 × 访问加成≤1.5")]:::data
+    D_EMO[("emotion 单行<br/>trust/task_liking/social_liking<br/>无上限 · 满1金条")]:::data
+    D_LOGS[("ai_reminders + notify_log<br/>+ proactive_logs")]:::data
+    D_USE[("llm_usage 调用统计<br/>用途/provider/model/tokens/耗时<br/>WebUI 监控页 · 明细90天")]:::data
+    D_BACKUP[("backups/ 留7份")]:::data
+  end
+  P1 -.-> D_EMO
+  P3 -.-> D_MEM
+  P6 -.-> D_USE
+  BG_INTENT -.-> D_USE
+  T_CREATE -.-> D_TASKS
+  T_DONE -.-> D_TASKS
+  T_STORE -.-> D_MEM
+  T_SEARCH -.-> D_MEM
+  T_REMIND -.-> D_LOGS
+  S_REMIND -.-> D_LOGS
+  S_PRO -.-> D_LOGS
+  BG_SUM -.-> D_MEM
+  BG_EXTRACT -.-> D_MEM
+  BG_INTENT -.-> D_MEM
+
+  classDef plugin fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px;
+  classDef host fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px;
+  classDef tool fill:#FFFDE7,stroke:#F9A825,stroke-width:1px;
+  classDef bg fill:#E3F2FD,stroke:#1565C0,stroke-width:2px;
+  classDef push fill:#E0F7FA,stroke:#00838F,stroke-width:2px;
+  classDef data fill:#FCE4EC,stroke:#C2185B,stroke-width:2px;
+  classDef mem fill:#EDE7F6,stroke:#5E35B1,stroke-width:2px;
+  classDef emo fill:#FFEBEE,stroke:#C62828,stroke-width:2px;
+  classDef ext fill:#FAFAFA,stroke:#9E9E9E,stroke-width:1px,stroke-dasharray:5 5;

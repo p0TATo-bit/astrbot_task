@@ -1,0 +1,161 @@
+{
+  "push": {
+    "type": "object",
+    "description": "主动推送(定时提醒 / 临近开始 / 过期汇总 / 计划)",
+    "items": {
+      "push_enabled": {
+        "description": "启用定时推送",
+        "type": "bool",
+        "default": true,
+        "hint": "定时提醒 / 临近开始 / 过期汇总 / 计划推送的总开关。关闭后聊天和工具不受影响"
+      },
+      "upcoming_minutes": {
+        "description": "临近开始提醒提前量(分钟)",
+        "type": "int",
+        "default": 45,
+        "slider": { "min": 5, "max": 120, "step": 5 },
+        "hint": "有明确开始时间的任务, 开始前 X 分钟提醒一次"
+      },
+      "owner_umo": {
+        "description": "推送目标 UMO(留空=自动跟随)",
+        "type": "string",
+        "default": "",
+        "hint": "留空 = 推送到最近聊天的会话(和她聊过一句就自动锁定)。一般不用填"
+      }
+    }
+  },
+  "proactive": {
+    "type": "object",
+    "description": "主动关心(AI 主动找你说话)",
+    "items": {
+      "proactive_enabled": {
+        "description": "启用 AI 主动关心",
+        "type": "bool",
+        "default": true,
+        "hint": "在允许时段内随机触发; 选题: 逾期堆积 / 重要截止 / 晚间夸奖 / 久未互动"
+      },
+      "proactive_random_base": {
+        "description": "随机触发基础概率(0~1)",
+        "type": "float",
+        "default": 0.3,
+        "slider": { "min": 0, "max": 1, "step": 0.05 },
+        "hint": "实际概率 = 基础 × (1 + min(2, 信任+社交好感+任务好感) ÷ 2), 好感越高越爱找你。时段/每日上限/最小间隔/同主题每日一次仍然生效。设 1 = 通过条件必触发(旧行为)"
+      },
+      "proactive_window_start": {
+        "description": "允许时段开始(小时)",
+        "type": "int",
+        "default": 10,
+        "slider": { "min": 0, "max": 23, "step": 1 }
+      },
+      "proactive_window_end": {
+        "description": "允许时段结束(小时)",
+        "type": "int",
+        "default": 21,
+        "slider": { "min": 0, "max": 23, "step": 1 }
+      },
+      "proactive_max_per_day": {
+        "description": "每日上限(条)",
+        "type": "int",
+        "default": 2,
+        "slider": { "min": 1, "max": 10, "step": 1 }
+      },
+      "proactive_gap_hours": {
+        "description": "最小间隔(小时)",
+        "type": "float",
+        "default": 4,
+        "slider": { "min": 1, "max": 24, "step": 1 }
+      }
+    }
+  },
+  "content": {
+    "type": "object",
+    "description": "每日内容推送(网上有意思的事)",
+    "items": {
+      "content_push_enabled": {
+        "description": "启用每日内容推送",
+        "type": "bool",
+        "default": true,
+        "hint": "到点按话题搜索网上的新鲜内容推给你; 主人在聊天里说「别推了」她也会关"
+      },
+      "content_push_hour": {
+        "description": "推送时间(小时)",
+        "type": "int",
+        "default": 21,
+        "slider": { "min": 6, "max": 23, "step": 1 }
+      },
+      "content_topics": {
+        "description": "感兴趣的话题(逗号分隔)",
+        "type": "string",
+        "default": "科技趣闻, 有趣的新闻",
+        "hint": "在聊天里对她说「每天推点AI和考研资讯」也能改"
+      }
+    }
+  },
+  "admin": {
+    "type": "object",
+    "description": "管理模型(插件内部 LLM 任务)",
+    "items": {
+      "admin_provider_id": {
+        "description": "管理模型 Provider ID(留空=跟随聊天模型)",
+        "type": "string",
+        "default": "",
+        "hint": "记忆总结 / 提取 / 关键词精修 / 意图分析 / 情绪微调 / 推送口吻 / 计划生成 等内部任务统一用它, 建议填便宜快的小模型; 聊天回复不受影响。填法: 面板「服务提供商」页每个配置都有 ID, 抄过来填这里; 不确定就 QQ 发 /任务 模型, 她会列出全部可用 ID。留空完全可用, 内部任务会自动用当前聊天模型"
+      },
+      "tool_voice_enabled": {
+        "description": "工具结果用人格口吻播报",
+        "type": "bool",
+        "default": true,
+        "hint": "建/删/改任务等操作完成后, 由管理模型把原始结果改写成她的口吻(一两句话), 不再出现机器式的原始文本。关闭则直接输出原始结果"
+      },
+      "auto_extract_enabled": {
+        "description": "每轮自动提取记忆(默认关)",
+        "type": "bool",
+        "default": false,
+        "hint": "开=每轮对话后模型都可能随手记一条; 关(默认)=记忆节点只来自每 20 轮的周期总结和主人明确说「记住X」, 节点更精炼"
+      }
+    }
+  },
+  "vision": {
+    "type": "object",
+    "description": "识图(图片转文字描述)",
+    "items": {
+      "vision_api_url": {
+        "description": "识图 API 基址(留空=不启用识图)",
+        "type": "string",
+        "default": "https://integrate.api.nvidia.com/v1",
+        "hint": "OpenAI 兼容接口地址, 默认 NVIDIA。留空则收到图片时不做识图"
+      },
+      "vision_api_key": {
+        "description": "识图 API Key",
+        "type": "string",
+        "default": "",
+        "hint": "与基址对应的 Key"
+      },
+      "vision_model": {
+        "description": "识图多模态模型名",
+        "type": "string",
+        "default": "nvidia/nemotron-3.5-super-vl-120b-a12b",
+        "hint": "支持图片输入的模型, 如 nemotron / llama-3.2-vision 系列"
+      }
+    }
+  },
+  "webui": {
+    "type": "object",
+    "description": "WebUI(浏览器管理界面 :6187)",
+    "items": {
+      "webui_host": {
+        "description": "监听地址(Docker 用 0.0.0.0)",
+        "type": "string",
+        "default": "0.0.0.0",
+        "hint": "Docker 部署必须 0.0.0.0 否则端口映射进不来; 本机裸跑想仅本机访问改 127.0.0.1"
+      },
+      "webui_port": {
+        "description": "监听端口(默认 6187)",
+        "type": "int",
+        "default": 6187,
+        "slider": { "min": 6000, "max": 6999, "step": 1 },
+        "hint": "冲突时可改, 改完记得同步 SSH 隧道的端口"
+      }
+    }
+  }
+}

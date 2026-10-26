@@ -1,0 +1,10 @@
+# 运行数据(插件自动生成)
+data.db
+data.db-journal
+notes/
+backups/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

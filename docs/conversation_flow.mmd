@@ -1,0 +1,97 @@
+flowchart TD
+    %% ============ 入口 ============
+    U[("用户消息\nAstrMessageEvent")] --> EB{EventBus 分发}
+    
+    %% ============ AstrBot 核心流程 ============
+    subgraph AstrBot_Core[AstrBot 核心流程]
+        direction TB
+        EB --> PROV[Provider 管理\n(模型/人格/参数)]
+        PROV --> LP[LLM 生成请求\nsystem_prompt + history]
+        LP --> LLM[大模型 API\nNVIDIA / OpenAI 兼容]
+        LLM --> REQ[请求对象 req]
+        REQ --> RESP[响应对象 resp]
+        RESP --> OUT[发回用户]
+    end
+    
+    %% ============ 插件钩子 (on_llm_request) ============
+    subgraph Plugin_Hooks[astrbot_task 钩子注入]
+        direction TB
+        REQ -.->|on_llm_request| HOOK[TaskPlugin.on_llm_request]
+        
+        HOOK --> EMOTION[emotion.build_context()\n自然语言情绪描述]
+        HOOK --> MEMORY[associative_recall()\nIDF+多跳+情绪一致性]
+        HOOK --> TIME[now_str()\n当前时间]
+        
+        EMOTION --> INJECT[拼接注入]
+        MEMORY --> INJECT
+        TIME --> INJECT
+        
+        INJECT --> REQ_SYS[req.system_prompt +=\n\n情绪\n\n记忆\n\n时间]
+        REQ_SYS --> LP
+    end
+    
+    %% ============ 后台异步 LLM 调用 ============
+    subgraph Background_LLM[后台异步 LLM 调用 (走 _llm_call)]
+        direction TB
+        
+        subgraph Intent[意图分析 _intent_call]
+            direction TB
+            I1[每轮触发] --> I2[_llm_call(prompt, system)]
+            I2 --> I3{解析 JSON}
+            I3 -->|recall[]| RECALL_WORDS[检索词列表]
+            I3 -->|emotion{}| EMOTION_ADJ[情绪微调量 ±0.08]
+            RECALL_WORDS -.-> MEMORY
+            EMOTION_ADJ -.->|apply_adjust| EMOTION_ENGINE[EmotionEngine]
+        end
+        
+        subgraph Summary[周期总结 periodic_summary]
+            direction TB
+            S1[每 20 轮触发] --> S2[_llm_call(总结提示词)]
+            S2 --> S3{解析 JSON}
+            S3 --> S4[summary 存 summaries 表]
+            S3 --> S5[facts[] 回灌 memories\nimportance≥4 晋升金环]
+        end
+        
+        subgraph Calibration[情绪校准 每 10 轮]
+            direction TB
+            C1[触发] --> C2[_llm_call(校准提示词)]
+            C2 --> C3{解析 JSON}
+            C3 -->|adj ±0.15| EMOTION_ENGINE
+        end
+        
+        subgraph PlanPush[计划推送/主动关心/提醒口吻]
+            direction TB
+            P1[scheduler tick] --> P2[persona_notify / _gen_plan]
+            P2 --> P3[_llm_call(人格+事实)]
+            P3 --> P4[纯文本推送\nsend_message]
+        end
+    end
+    
+    %% ============ 数据层 ============
+    subgraph Data_Layer[SQLite 数据层 (data.db)]
+        direction TB
+        DB_TASKS[(tasks\n+ task_occurrence_completions)]
+        DB_MEM[(memories\n+ summaries)]
+        DB_EMO[(emotion\nstate_json/relation_json\n+ emotion_log)]
+        DB_CFG[(config\n运行时配置覆盖)]
+    end
+    
+    %% ============ 连线 ============
+    MEMORY -.->|读/写| DB_MEM
+    EMOTION -.->|读/写| DB_EMO
+    EMOTION_ENGINE -.->|读/写| DB_EMO
+    TASKS[任务工具 CRUD] -.->|读/写| DB_TASKS
+    SCHED[scheduler] -.->|读任务/写提醒| DB_TASKS
+    
+    %% ============ 样式 ============
+    classDef core fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef hook fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+    classDef bg fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef data fill:#fce4ec,stroke:#c2185b,stroke-width:2px;
+    classDef ext fill:#f3e5f5,stroke:#7b1fa2,stroke-width:1px,stroke-dasharray: 5 5;
+    
+    class AstrBot_Core core;
+    class Plugin_Hooks hook;
+    class Background_LLM bg;
+    class Data_Layer data;
+    class U,LLM,PROV,OUT ext;

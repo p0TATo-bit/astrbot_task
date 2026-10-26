@@ -1,0 +1,2 @@
+# astrbot_task 零第三方依赖: 仅用 Python 标准库(sqlite3/json/re/datetime)
+# AstrBot 本体提供 LLM 调用与消息接入, 本插件无需额外 pip 包

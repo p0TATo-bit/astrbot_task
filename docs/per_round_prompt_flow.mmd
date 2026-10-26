@@ -1,0 +1,86 @@
+flowchart LR
+    %% 简化版: 专注"每轮提示词如何流入插件并注入模型"
+    
+    classDef prompt fill:#fce4ec,stroke:#c2185b,stroke-width:3px,color:#c2185b;
+    classDef hook fill:#fff3e0,stroke:#ef6c00,stroke-width:2px;
+    classDef astrbot fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef data fill:#f1f8e9,stroke:#558b2f,stroke-width:2px;
+    classDef ext fill:#fafafa,stroke:#9e9e9e,stroke-width:1px,stroke-dasharray: 5 5;
+
+    %% 入口
+    USER[("用户消息")]:::ext --> ASTRBOT[AstrBot 收到消息]:::astrbot
+    
+    %% AstrBot 构建请求
+    subgraph Build[AstrBot 构建 LLM 请求]
+        direction TB
+        PROV[Provider 配置]:::astrbot
+        PERSONA[面板人格 System Prompt\n(用户在 AstrBot 面板配置的任意人格)]:::prompt
+        HIST[对话历史\n最近 N 轮 user/assistant]:::astrbot
+        REQ_OBJ[LLMRequest 对象\nsystem_prompt = 人格 + history]:::astrbot
+    end
+    
+    ASTRBOT --> Build
+
+    %% 插件钩子拦截 (核心!)
+    subgraph Hook[astrbot_task.on_llm_request 钩子\nmain.py:378 @filter.on_llm_request()]
+        direction TB
+        
+        REQ_OBJ -.->|拦截 req| HOOK_FN[TaskPlugin.on_llm_request(req)]:::hook
+        
+        %% 并行准备三段上下文
+        HOOK_FN -->|读 emotion 表| EMO_FN[emotion.build_context()\nemotion.py:146]:::prompt
+        HOOK_FN -->|读 memories 表| MEM_FN[memory.associative_recall()\nmemory.py:187\nIDF → 多跳0.5衰减 → 情绪重排 → Top-5]:::prompt
+        HOOK_FN -->|生成| TIME_FN[now_str()\nmain.py:36\n"2026-10-26 19:45 星期六"]:::prompt
+        
+        %% 拼接
+        EMO_FN --> JOIN["\n\n".join([情绪, 记忆, 时间])]:::prompt
+        MEM_FN --> JOIN
+        TIME_FN --> JOIN
+        
+        %% 关键: 追加不替换
+        JOIN --> APPEND[req.system_prompt +=\n\n情绪上下文\n\n相关记忆\n\n当前时间]:::prompt
+        APPEND --> REQ_OBJ
+    end
+    
+    %% 最终 system_prompt 结构可视化
+    subgraph FinalPrompt[最终发给大模型的 system_prompt 结构]
+        direction TB
+        FINAL_PERSONA[① 面板人格\n(用户自定义人格，插件不内置任何人设)]:::prompt
+        FINAL_EMO[② 情绪上下文\n"你心情不错, 有点疲惫, 精力尚可,\n对主人视主人为她的整个世界..."]:::prompt
+        FINAL_MEM[③ 相关记忆 Top-5\n"1. [事实] 主人每周三下午有组会...\n2. [偏好] 主人喜欢无糖冰美式...\n..."]:::prompt
+        FINAL_TIME[④ 当前时间\n"2026-10-26 19:45 星期六\n涉及今天/明天/几点以此为准"]:::prompt
+        
+        FINAL_PERSONA --> FINAL_FULL
+        FINAL_EMO --> FINAL_FULL
+        FINAL_MEM --> FINAL_FULL
+        FINAL_TIME --> FINAL_FULL
+        
+        FINAL_FULL[完整 system_prompt\n= ① + \n\n + ② + \n\n + ③ + \n\n + ④]:::prompt
+    end
+    
+    REQ_OBJ -->|system_prompt = FINAL_FULL| LLM[大模型 API\nNVIDIA / OpenAI 兼容]:::ext
+    LLM --> REPLY[模型生成回复\n(已知晓人格+情绪+记忆+时间)]:::ext
+    REPLY --> USER_OUT[发回用户]:::astrbot
+
+    %% 后台异步 (虚线, 不阻塞主流程)
+    subgraph Bg[后台异步 (走 _llm_call 代理 AstrBot provider, 不阻塞主流程)]
+        direction TB
+        BG1[1. 意图分析 _intent_call (每轮)\n→ recall[] + emotion微调±0.08]:::prompt
+        BG2[2. 周期总结 periodic_summary (20轮)\n→ summary + facts回灌]:::prompt
+        BG3[3. 情绪校准 (10轮)\n→ ±0.15 落库]:::prompt
+        BG4[4. 推送口吻 persona_notify\n→ 纯文本 send_message]:::prompt
+    end
+    
+    HOOK_FN -.->|asyncio.create_task| BG1
+    MEM_FN -.->|每轮计数| BG2
+    EMO_FN -.->|每轮计数| BG3
+    HOOK_FN -.->|scheduler触发| BG4
+    
+    %% 数据层
+    DB[(SQLite data.db\nmemories/emotion/tasks/summaries)]:::data
+    EMO_FN -.->|读| DB
+    MEM_FN -.->|读/写| DB
+    BG1 -.->|读/写| DB
+    BG2 -.->|读/写| DB
+    BG3 -.->|读/写| DB
+    BG4 -.->|读任务| DB
