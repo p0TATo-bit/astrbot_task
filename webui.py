@@ -6,6 +6,7 @@ import json
 import sqlite3
 import threading
 import datetime
+from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import tasks_core
@@ -120,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._safe(e)
 
     def _safe(self, e):
-        print("[astrbot_task] WebUI 请求处理失败:", e)
+        logger.error("[astrbot_task] WebUI 请求处理失败:", e)
         try:
             return self._json({"error": str(e)}, 500)
         except Exception:
@@ -297,6 +298,9 @@ class Handler(BaseHTTPRequestHandler):
                              f"attachment; filename=\"note_{day}.md\"; filename*=UTF-8''{_up.quote(fn)}")
             self.end_headers()
             self.wfile.write(body)
+        if self.path.startswith("/api/config"):
+            cfg = _state.get("config") or {}
+            return self._json({"config": cfg, "editable": bool(_state.get("save_cb"))})
         if self.path.startswith("/api/chats"):
             limit = 80
             try:
@@ -356,6 +360,24 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- POST ----
     def _post(self):
+        if self.path == "/api/config/save":
+            if not _state.get("save_cb"):
+                return self._json({"error": "此实例不支持配置写入"}, 400)
+            data = self._body()
+            cfg = _state.get("config") or {}
+            body = data.get("config") if isinstance(data.get("config"), dict) else {}
+            for gkey, items in body.items():
+                if not isinstance(items, dict):
+                    continue
+                g = cfg.get(gkey)
+                g = dict(g) if isinstance(g, dict) else {}
+                g.update(items)
+                cfg[gkey] = g
+            try:
+                _state["save_cb"](cfg)
+                return self._json({"ok": True})
+            except Exception as e:
+                return self._json({"error": str(e)}, 500)
         if self.path == "/api/notes/save":
             data = self._body()
             try:
@@ -639,6 +661,7 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
       <div class="nav-item" data-p="chats">对话</div>
       <div class="nav-item" data-p="emotion">情绪</div>
       <div class="nav-item" data-p="docs">文档</div>
+      <div class="nav-item" data-p="settings">设置</div>
       <div class="nav-item" data-p="usage">监控</div>
     </div>
     <div style="margin-top:14px; padding:0 10px;">
@@ -709,7 +732,12 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
       <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
           <h2>记忆关联图</h2>
-          <button class="btn" onclick="loadGraph()">刷新</button>
+          <div style="display:flex; gap:4px; align-items:center;">
+            <button class="btn gmode-btn" data-m="force" onclick="setGMode('force')">力导向</button>
+            <button class="btn gmode-btn" data-m="rings" onclick="setGMode('rings')">同心圆</button>
+            <button class="btn gmode-btn" data-m="timeline" onclick="setGMode('timeline')">时间轴</button>
+            <button class="btn" onclick="loadGraph()">刷新</button>
+          </div>
         </div>
         <canvas id="graph" style="width:100%; height:360px; background:var(--bg); border-radius:10px; border:1px solid var(--border); cursor:pointer;"></canvas>
         <div class="meta" style="margin-top:6px;">节点大小=有效权重 · 连线=关键词连锁 · 金环★=持久层(想起≥5次晋升) · 拖动摆放 · 点击看详情 · 滚轮缩放</div>
@@ -780,6 +808,18 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
           </div>
         </div>
         <pre id="doc-view" style="white-space:pre-wrap; font-size:13px; line-height:1.8; margin-top:10px;"></pre>
+      </div>
+    </div>
+
+    <div id="p-settings" style="display:none">
+      <div class="card">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+          <h2 style="margin:0;">设置</h2>
+          <button class="btn primary" onclick="saveSettings()">保存全部</button>
+        </div>
+        <div class="meta" style="margin-top:6px;">与 AstrBot 面板的插件配置互通 · 保存后立即生效(监听地址/端口除外, 需重载插件)</div>
+        <div id="settings-form" style="margin-top:10px;"></div>
+        <div id="settings-msg" class="meta" style="margin-top:8px;"></div>
       </div>
     </div>
 
@@ -888,6 +928,7 @@ function page(p) {
   if (p === 'chats') loadChats();
   if (p === 'emotion') loadEmo();
   if (p === 'docs') loadDocs();
+  if (p === 'settings') loadSettings();
   if (p === 'usage') loadUsage();
 }
 document.querySelectorAll('.nav-item').forEach(n => n.onclick = () => page(n.dataset.p));
@@ -1169,15 +1210,17 @@ async function saveMem() {
 
 /* ===== 关联图(力导向 Canvas, 移植自 teaskks) ===== */
 let gData = null, gNodes = [], gEdges = [], gZoom = 1, gPanX = 0, gPanY = 0, gHl = null, gDrag = null;
+let gMode = 'force';
+function setGMode(m) { gMode = m; layoutGraph(); }
 async function loadGraph() {
   gData = await api('/api/memory/graph');
   const c = document.getElementById('graph');
-  const w = c.clientWidth || 800, h = 360;
-  gNodes = (gData.nodes || []).map((n, i) => ({...n, x: w/2 + Math.cos(i*2.4)*(60+(i%12)*22), y: 180 + Math.sin(i*2.4)*(40+(i%10)*16), vx:0, vy:0}));
+  gNodes = (gData.nodes || []).map((n, i) => ({...n, x: 0, y: 0, vx:0, vy:0}));
   const byId = Object.fromEntries(gNodes.map(n => [n.id, n]));
   gEdges = (gData.edges || []).map(e => ({...e, na: byId[e.a], nb: byId[e.b]})).filter(e => e.na && e.nb);
+  layoutGraph();
   const wMax = Math.max(0.001, ...gEdges.map(e => e.w));
-  for (let it = 0; it < 300; it++) {
+  for (let it = 0; it < 300 && gMode === 'force'; it++) {
     for (let i = 0; i < gNodes.length; i++) for (let j = i+1; j < gNodes.length; j++) {
       const a = gNodes[i], b = gNodes[j];
       let dx = b.x-a.x, dy = b.y-a.y; const d2 = dx*dx+dy*dy+0.01, d = Math.sqrt(d2), rep = 2600/d2;
@@ -1190,9 +1233,59 @@ async function loadGraph() {
       a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
     }
     for (const n of gNodes) {
-      n.vx += (w/2-n.x)*0.002; n.vy += (180-n.y)*0.002; n.vx*=0.85; n.vy*=0.85;
-      n.x = Math.max(26, Math.min(w-26, n.x+n.vx)); n.y = Math.max(20, Math.min(h-20, n.y+n.vy));
+      n.vx += (c.clientWidth/2-n.x)*0.002; n.vy += (180-n.y)*0.002; n.vx*=0.85; n.vy*=0.85;
+      n.x = Math.max(26, Math.min(c.clientWidth-26, n.x+n.vx)); n.y = Math.max(20, Math.min(340, n.y+n.vy));
     }
+  }
+  drawGraph();
+}
+function layoutGraph() {
+  const c = document.getElementById('graph');
+  const w = c.clientWidth || 800, h = 360;
+  const n = gNodes.length;
+  if (!n) return;
+  if (gMode === 'force') {
+    const spread = Math.max(1, Math.sqrt(n / 8));
+    for (let i = 0; i < gNodes.length; i++) for (let j = i+1; j < gNodes.length; j++) {
+      const a = gNodes[i], b = gNodes[j];
+      let dx = b.x-a.x, dy = b.y-a.y; const d2 = dx*dx+dy*dy+0.01, d = Math.sqrt(d2), rep = 2600*spread*spread/d2;
+      dx/=d; dy/=d; a.vx-=dx*rep; a.vy-=dy*rep; b.vx+=dx*rep; b.vy+=dy*rep;
+    }
+    for (const e of gEdges) {
+      const a = e.na, b = e.nb;
+      let dx = b.x-a.x, dy = b.y-a.y; const d = Math.sqrt(dx*dx+dy*dy)+0.01;
+      const rest = (80+70*(1-e.w/wMax))*spread; const f = (d - rest)*0.02; dx/=d; dy/=d;
+      a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
+    }
+    for (const nd of gNodes) { nd.vx*=0.85; nd.vy*=0.85; nd.x+=nd.vx; nd.y+=nd.vy; }
+    // 归一化铺满画布: 记忆多时自动放大散布, 不再挤成一团
+    const xs = gNodes.map(nd => nd.x), ys = gNodes.map(nd => nd.y);
+    const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+    const bw = Math.max(1, maxx-minx), bh = Math.max(1, maxy-miny);
+    const pad = 30, sc = Math.min((w-60)/bw, (h-60)/bh, 3);
+    const ox = (w - bw*sc)/2, oy = (h - bh*sc)/2;
+    for (const nd of gNodes) { nd.x = ox + (nd.x-minx)*sc; nd.y = oy + (nd.y-miny)*sc; }
+  } else if (gMode === 'rings') {
+    // 同心圆: 金环/高权重居内, 越外层越次要
+    const sorted = [...gNodes].sort((a, b) => (b.pinned - a.pinned) || ((b.eff || 3) - (a.eff || 3)));
+    let idx = 0;
+    for (let ring = 0; idx < sorted.length; ring++) {
+      const count = Math.min(sorted.length - idx, ring === 0 ? 5 : 6 + ring * 3);
+      const rad = ring === 0 ? 0 : Math.min(60 + (ring - 1) * 80, Math.min(w, h) / 2 - 45);
+      for (let i = 0; i < count && idx < sorted.length; i++, idx++) {
+        const nd = sorted[idx];
+        if (ring === 0) { nd.x = w/2; nd.y = h/2; }
+        else { const a = (i / count) * Math.PI*2 - Math.PI/2; nd.x = w/2 + Math.cos(a)*rad; nd.y = h/2 + Math.sin(a)*rad*0.72; }
+      }
+    }
+  } else {
+    // 时间轴: 按创建时间从左到右
+    const sorted = [...gNodes].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+    sorted.forEach((nd, i) => {
+      const t = sorted.length > 1 ? i / (sorted.length - 1) : 0.5;
+      nd.x = 55 + t * (w - 110);
+      nd.y = 45 + ((i * 47) % (h - 90));
+    });
   }
   drawGraph();
 }
@@ -1361,7 +1454,56 @@ async function delDoc(t) {
   if (currentDoc === t) closeDocView();
 }
 
-/* ===== 监控: 调用次数 + token 消耗(甜甜圈 + 热力图) ===== */
+/* ===== 设置: 插件配置可视化编辑 ===== */
+const SETTING_FIELDS = [
+  { g: 'push', k: 'push_enabled', label: '启用定时推送', type: 'bool' },
+  { g: 'push', k: 'upcoming_minutes', label: '课前提醒提前量(分钟)', type: 'num' },
+  { g: 'push', k: 'owner_umo', label: '推送目标 UMO(留空=自动)', type: 'text' },
+  { g: 'proactive', k: 'proactive_enabled', label: '启用主动关心', type: 'bool' },
+  { g: 'proactive', k: 'proactive_random_base', label: '主动关心基础概率(0~1)', type: 'num' },
+  { g: 'proactive', k: 'proactive_window_start', label: '允许时段开始(小时)', type: 'num' },
+  { g: 'proactive', k: 'proactive_window_end', label: '允许时段结束(小时)', type: 'num' },
+  { g: 'proactive', k: 'proactive_max_per_day', label: '每日上限(条)', type: 'num' },
+  { g: 'proactive', k: 'proactive_gap_hours', label: '最小间隔(小时)', type: 'num' },
+  { g: 'content', k: 'content_push_enabled', label: '启用每日内容推送', type: 'bool' },
+  { g: 'content', k: 'content_push_hour', label: '内容推送时间(小时)', type: 'num' },
+  { g: 'content', k: 'content_topics', label: '感兴趣的话题(逗号分隔)', type: 'text' },
+  { g: 'admin', k: 'admin_provider_id', label: '管理模型 Provider ID(留空=跟随聊天)', type: 'text' },
+  { g: 'vision', k: 'vision_api_url', label: '识图 API 基址(留空=不启用)', type: 'text' },
+  { g: 'vision', k: 'vision_api_key', label: '识图 API Key', type: 'text' },
+  { g: 'vision', k: 'vision_model', label: '识图模型名', type: 'text' },
+  { g: 'reply', k: 'reply_split_enabled', label: '长回复分段发送', type: 'bool' },
+  { g: 'reply', k: 'reply_max_len', label: '分段阈值(字符)', type: 'num' },
+  { g: 'reply', k: 'reply_delay_ms', label: '分段间隔(毫秒)', type: 'num' },
+  { g: 'reply', k: 'reply_style', label: '回复风格提示', type: 'text' },
+  { g: 'admin', k: 'auto_extract_enabled', label: '每轮自动提取记忆(默认关)', type: 'bool' },
+  { g: 'admin', k: 'tool_voice_enabled', label: '工具结果口吻播报', type: 'bool' },
+];
+async function loadSettings() {
+  const d = await api('/api/config');
+  const cfg = d.config || {};
+  const get = (g, k) => (cfg[g] && cfg[g][k] !== undefined && cfg[g][k] !== null) ? cfg[g][k] : '';
+  document.getElementById('settings-form').innerHTML = SETTING_FIELDS.map(f => {
+    const v = get(f.g, f.k);
+    const id = `sf_${f.g}_${f.k}`;
+    const ctl = f.type === 'bool'
+      ? `<input type="checkbox" id="${id}" ${v === true || v === 'true' ? 'checked' : ''}>`
+      : `<input type="${f.type === 'num' ? 'number' : 'text'}" id="${id}" value="${esc(String(v))}" step="any">`;
+    return `<div class="row"><span style="width:240px; font-size:13px;">${esc(f.label)}</span>${ctl}</div>`;
+  }).join('');
+}
+async function saveSettings() {
+  const config = {};
+  for (const f of SETTING_FIELDS) {
+    const el = document.getElementById(`sf_${f.g}_${f.k}`);
+    if (!el) continue;
+    let v = f.type === 'bool' ? el.checked : el.value;
+    if (f.type === 'num') v = el.value === '' ? '' : Number(el.value);
+    (config[f.g] = config[f.g] || {})[f.k] = v;
+  }
+  const res = await api('/api/config/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ config }) });
+  document.getElementById('settings-msg').textContent = res.ok ? '已保存 ✓' : ('保存失败: ' + (res.error || '?'));
+}
 const U_KIND = {chat:'聊天', intent:'意图分析', summary:'周期总结', extract:'自动提取', keywords:'关键词精修', notify:'推送口吻', plan:'计划生成', misc:'其他'};
 const U_COLOR = {chat:'#5B8C8F', intent:'#8E6FBF', summary:'#D3A445', extract:'#3F9A78', keywords:'#4F9EA6', notify:'#C0616B', plan:'#A76BA6', misc:'#7C8AA0'};
 const fmtN = n => (n === null || n === undefined) ? '—' : Number(n).toLocaleString('zh-CN');
@@ -1451,20 +1593,22 @@ setTimeout(bindGraph, 300);
 </html>"""
 
 
-def start(db_path: str, port: int = 6187, host: str = "127.0.0.1"):
+def start(db_path: str, port: int = 6187, host: str = "127.0.0.1", config=None, save_cb=None):
     if _get_server():
         return  # 进程级注册表里已有存活服务(跨模块重载存活), 不重复绑定
     _state["db_path"] = db_path
     _state["port"] = port
+    _state["config"] = config if isinstance(config, dict) else {}
+    _state["save_cb"] = save_cb
     try:
         server = ThreadingHTTPServer((host, port), Handler)
     except OSError as e:
-        print(f"[astrbot_task] WebUI 端口 {port} 被占用, 未启动: {e}")
+        logger.error(f"[astrbot_task] WebUI 端口 {port} 被占用, 未启动: {e}")
         return
     server.daemon_threads = True
     _set_server(server)
     threading.Thread(target=server.serve_forever, daemon=True, name="astrbot-task-webui").start()
-    print(f"[astrbot_task] WebUI 已启动: http://{host}:{port}")
+    logger.info(f"[astrbot_task] WebUI 已启动: http://{host}:{port}")
 
 
 def stop():
@@ -1475,4 +1619,4 @@ def stop():
         except Exception:
             pass
         _set_server(None)
-        print("[astrbot_task] WebUI 已停止")
+        logger.info("[astrbot_task] WebUI 已停止")

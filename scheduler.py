@@ -9,6 +9,7 @@ import random
 import sqlite3
 import datetime
 import asyncio
+from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 
 import skills as skills_mod
 import tasks_core
@@ -133,7 +134,7 @@ class Scheduler:
             asyncio.get_running_loop()
         except RuntimeError:
             # 无运行中的事件循环(如测试环境): 不启动循环
-            print("[astrbot_task] 调度循环未启动(无事件循环)")
+            logger.error("[astrbot_task] 调度循环未启动(无事件循环)")
             return
         self.task = asyncio.create_task(self._loop())
         self._boot_backup()
@@ -157,7 +158,7 @@ class Scheduler:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                print("[astrbot_task] 调度 tick 失败:", e)
+                logger.error("[astrbot_task] 调度 tick 失败:", e)
             await asyncio.sleep(60)
 
     async def tick(self):
@@ -171,7 +172,7 @@ class Scheduler:
                 text = await p.persona_notify("定时提醒", f"提醒内容: {content}", f"⏰ 你设置的提醒\n{content}")
                 await p.push(text)
                 c.execute("UPDATE ai_reminders SET sent = 1 WHERE id = ?", (rid,))
-                print("[astrbot_task] 定时提醒已发送:", content[:40])
+                logger.info("[astrbot_task] 定时提醒已发送:", content[:40])
 
             # 2) 临近开始提醒
             window_min = int(p._cfg("upcoming_minutes", 45))
@@ -306,7 +307,7 @@ class Scheduler:
                 "你是任务规划助手。直接输出计划内容, 不要输出其他解释。",
                 kind="plan")
         except Exception as e:
-            print("[astrbot_task] 计划生成失败:", e)
+            logger.error("[astrbot_task] 计划生成失败:", e)
             return
         await p.push(f"【{scope}计划】\n{text}")
         self._mark(c, key)
@@ -333,9 +334,9 @@ class Scheduler:
             files = sorted(f for f in os.listdir(bdir) if f.startswith("data-") and f.endswith(".db"))
             for f in files[:-BACKUP_KEEP]:
                 os.remove(os.path.join(bdir, f))
-            print("[astrbot_task] 数据库备份完成:", dest)
+            logger.info("[astrbot_task] 数据库备份完成:", dest)
         except Exception as e:
-            print("[astrbot_task] 备份失败:", e)
+            logger.error("[astrbot_task] 备份失败:", e)
 
     def _notified(self, c, key):
         return c.execute("SELECT COUNT(*) n FROM notify_log WHERE key=?", (key,)).fetchone()["n"] > 0

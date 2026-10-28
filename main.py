@@ -12,12 +12,7 @@ import collections
 import sqlite3
 import datetime
 import asyncio
-try:
-    from astrbot.api import logger
-except Exception:  # 独立运行/测试时回退标准库
-    import logging
-    logger = logging.getLogger("astrbot_task")
-
+from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 
 from astrbot.api.star import Context, Star, register
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
