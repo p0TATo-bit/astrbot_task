@@ -1246,6 +1246,7 @@ function layoutGraph() {
   if (!n) return;
   if (gMode === 'force') {
     const spread = Math.max(1, Math.sqrt(n / 8));
+    const wMax = Math.max(0.001, ...gEdges.map(e => e.w));
     for (let i = 0; i < gNodes.length; i++) for (let j = i+1; j < gNodes.length; j++) {
       const a = gNodes[i], b = gNodes[j];
       let dx = b.x-a.x, dy = b.y-a.y; const d2 = dx*dx+dy*dy+0.01, d = Math.sqrt(d2), rep = 2600*spread*spread/d2;
