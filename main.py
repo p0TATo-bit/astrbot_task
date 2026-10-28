@@ -12,17 +12,27 @@ import collections
 import sqlite3
 import datetime
 import asyncio
+try:
+    from astrbot.api import logger
+except Exception:  # 独立运行/测试时回退标准库
+    import logging
+    logger = logging.getLogger("astrbot_task")
+
 
 from astrbot.api.star import Context, Star, register
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 # 数据库放插件目录之外: 插件更新/重装时插件目录可能被清空, 数据在 AstrBot data 根下才能幸存
-_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "astrbot_task_data")
-_LEGACY_DB = os.path.join(_HERE, "data.db")  # 旧位置(插件目录内), 首次启动自动迁移
+_DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(_HERE)), "plugin_data", "astrbot_task")  # 规范位置: data/plugin_data/<插件名>
+_LEGACY_DIRS = [  # 历史数据位置(按新到旧), 首次启动自动迁移到规范位置
+    os.path.join(os.path.dirname(os.path.dirname(_HERE)), "astrbot_task_data"),  # v0.8.x 的过渡位置
+    _HERE,  # v0.7.x 之前: 数据直接在插件目录里
+]
+_LEGACY_DB = os.path.join(_HERE, "data.db")
 DB_PATH = os.path.join(_DATA_DIR, "data.db")
 
 import emotion as emotion_mod
@@ -49,11 +59,16 @@ class TaskPlugin(Star):
         self._config = self.config if hasattr(self, "config") else {}
         try:
             os.makedirs(_DATA_DIR, exist_ok=True)
-            if not os.path.exists(DB_PATH) and os.path.exists(_LEGACY_DB):
-                shutil.copy2(_LEGACY_DB, DB_PATH)  # 旧位置数据自动迁移到新家
-                print("[astrbot_task] data.db 已从插件目录迁移到", DB_PATH)
+            if not os.path.exists(DB_PATH):
+                # 按新到旧迁移: v0.8.x 过渡目录 → 插件目录
+                for old_dir in _LEGACY_DIRS:
+                    old_db = os.path.join(old_dir, "data.db")
+                    if os.path.exists(old_db):
+                        shutil.copy2(old_db, DB_PATH)
+                        logger.info(f"[astrbot_task] data.db 已从 {old_dir} 迁移到 {DB_PATH}")
+                        break
         except Exception as e:
-            print("[astrbot_task] 数据目录准备失败:", e)
+            logger.error("[astrbot_task] 数据目录准备失败: " + str(e))
         self.db_path = DB_PATH  # scheduler/_conn 都经实例属性连库
         try:
             self._main_loop = asyncio.get_running_loop()  # 工作线程的 LLM 调用转投主循环
@@ -61,7 +76,7 @@ class TaskPlugin(Star):
             self._main_loop = None
         self._migrate_config()
         self._init_db()
-        print(f"[astrbot_task] 数据库: {self.db_path}")
+        logger.info(f"[astrbot_task] 数据库: {self.db_path}")
         self.emotion = emotion_mod.EmotionEngine(DB_PATH)
         self.memory = memory_mod.MemoryStore(
             DB_PATH,
@@ -73,14 +88,17 @@ class TaskPlugin(Star):
         self._user_hist = {}       # umo -> deque(用户消息, 20)
         self._ai_hist = {}         # umo -> deque(AI回复, 20)
         self._pending_confirmations = {}  # umo -> {"tool","task_id","title","at"} 破坏性操作二次确认(5分钟过期)
+        self._pending_quiz = {}  # umo -> {题目原文: {"id":.., "answer":..}} 进行中的抽查
         # 内嵌 WebUI: 宿主按文件路径加载 main.py, 插件目录不在 sys.path——手动加入后才能 import 兄弟模块
         try:
             import webui
             webui.start(DB_PATH,
                         int(self._cfg("webui_port") or 6187),
-                        (self._cfg("webui_host") or "").strip() or "0.0.0.0")
+                        (self._cfg("webui_host") or "").strip() or "0.0.0.0",
+                        config=self._config,
+                        save_cb=lambda cfg: self.save_config(cfg))
         except Exception as e:
-            print("[astrbot_task] WebUI 启动失败(任务/记忆功能不受影响):", e)
+            logger.error("[astrbot_task] WebUI 启动失败(任务/记忆功能不受影响): " + str(e))
         # 定时调度(提醒/过期汇总/主动关心/计划推送/备份)
         self.scheduler = scheduler_mod.Scheduler(self)
         self.scheduler.start()
@@ -113,9 +131,9 @@ class TaskPlugin(Star):
             cfg[gkey] = g
         try:
             self.save_config(self._config)
-            print("[astrbot_task] 配置已迁移为分组结构(大项套小项)")
+            logger.info("[astrbot_task] 配置已迁移为分组结构(大项套小项)")
         except Exception as e:
-            print("[astrbot_task] 配置迁移保存失败(运行时仍生效):", e)
+            logger.error("[astrbot_task] 配置迁移保存失败(运行时仍生效):", e)
 
     def _cfg(self, key: str, default=None):
         """读配置: 兼容迁移前的扁平键与迁移后的分组键"""
@@ -134,13 +152,12 @@ class TaskPlugin(Star):
         """主动推送消息到配置/最近会话"""
         umo = self._target_umo()
         if not umo:
-            print("[astrbot_task] 推送跳过: 没有可用的会话目标(先和机器人聊一句即可)")
+            logger.info("[astrbot_task] 推送跳过: 没有可用的会话目标(先和机器人聊一句即可)")
             return
         try:
-            from astrbot.api.message_chain import MessageChain
             await self.context.send_message(umo, MessageChain().message(text))
         except Exception as e:
-            print("[astrbot_task] 推送失败:", e)
+            logger.error("[astrbot_task] 推送失败:", e)
 
     async def persona_notify(self, kind: str, facts: str, fallback: str) -> str:
         """人格口吻生成(失败回退模板)——提醒/主动关心共用"""
@@ -152,7 +169,7 @@ class TaskPlugin(Star):
                 kind="notify")
             return text.strip() or fallback
         except Exception as e:
-            print("[astrbot_task]", kind, "口吻生成失败, 用模板:", e)
+            logger.error("[astrbot_task]", kind, "口吻生成失败, 用模板:", e)
             return fallback
 
     # ---------- LLM 调用(走 AstrBot provider) ----------
@@ -181,7 +198,7 @@ class TaskPlugin(Star):
                 self._record_usage(kind, admin, resp, int((time.time() - t0) * 1000))
                 return resp.completion_text or ""
             except Exception as e:
-                print(f"[astrbot_task] 管理模型 {admin} 调用失败, 回退聊天模型:", e)
+                logger.error(f"[astrbot_task] 管理模型 {admin} 调用失败, 回退聊天模型:", e)
                 self._record_usage(kind, admin, None, int((time.time() - t0) * 1000), ok=0)
         umo = self._last_umo
         provider_id = await self.context.get_current_chat_provider_id(umo=umo) if umo else None
@@ -224,7 +241,7 @@ class TaskPlugin(Star):
                     "VALUES (?,?,?,?,?,?,?,?)",
                     (kind, provider or "", str(model or "")[:80], pt, ct, tt, duration_ms, ok))
         except Exception as e:
-            print("[astrbot_task] 记录调用统计失败:", e)
+            logger.error("[astrbot_task] 记录调用统计失败:", e)
 
     async def _voice_result(self, raw: str, scene: str = "任务结果") -> str:
         """工具结果转人格口吻短句(走管理模型); 关闭或失败回退原文"""
@@ -241,7 +258,7 @@ class TaskPlugin(Star):
                 c.execute("DELETE FROM task_snapshots WHERE id NOT IN "
                           "(SELECT id FROM task_snapshots ORDER BY id DESC LIMIT 30)")
         except Exception as e:
-            print("[astrbot_task] 快照失败:", e)
+            logger.error("[astrbot_task] 快照失败:", e)
 
     def _do_undo(self, steps: int) -> str:
         """回退最近 n 步任务变更, 返回给用户看的结果文本"""
@@ -265,7 +282,7 @@ class TaskPlugin(Star):
             self._background.append(task)
             self._background = [t for t in self._background if not t.done()][-20:]
         except Exception as e:
-            print("[astrbot_task] 后台任务投递失败:", e)
+            logger.error("[astrbot_task] 后台任务投递失败:", e)
 
     async def terminate(self):
         """插件卸载/重载时由 AstrBot 调用(await): 停调度循环与 WebUI 线程"""
@@ -523,7 +540,7 @@ class TaskPlugin(Star):
             with self._conn() as c:
                 c.execute("INSERT INTO chats (umo, role, text) VALUES (?,?,?)", (umo, "user", text[:2000]))
         except Exception as e:
-            print("[astrbot_task] 对话记录失败:", e)
+            logger.error("[astrbot_task] 对话记录失败:", e)
         rounds = self.memory.bump_round(umo)
         if rounds > 0 and rounds % 20 == 0:
             # 满20轮: 后台生成周期总结(对话文本=双方最近各20条 zip)
@@ -533,11 +550,11 @@ class TaskPlugin(Star):
             convo = "\n\n".join(f"用户: {u}\n助手: {a}" for u, a in pairs)
             identity = self.emotion.build_context()
             self._spawn(asyncio.to_thread(self.memory.periodic_summary, umo, convo, identity))
-            print(f"[astrbot_task] 满{rounds}轮, 后台生成周期总结")
+            logger.info(f"[astrbot_task] 满{rounds}轮, 后台生成周期总结")
 
     @filter.on_llm_response()
     async def on_llm_response(self, event, resp):
-        """AI 回复落地: 配对历史 + 情绪微调已在召回阶段做 + 后台自动提取记忆"""
+        """AI 回复落地: 配对历史 + 分段发送 + 后台任务"""
         try:
             umo = event.unified_msg_origin
             self._last_umo = umo
@@ -549,7 +566,20 @@ class TaskPlugin(Star):
                     with self._conn() as c:
                         c.execute("INSERT INTO chats (umo, role, text) VALUES (?,?,?)", (umo, "ai", str(reply)[:2000]))
                 except Exception as e:
-                    print("[astrbot_task] 对话记录失败:", e)
+                    logger.error("[astrbot_task] 对话记录失败:", e)
+                # 分段发送: 长回复按句子切成多条消息, 模拟真人连发(失败回退整条)
+                if self._cfg("reply_split_enabled", True):
+                    try:
+                        segs = self._split_reply(str(reply), int(self._cfg("reply_max_len", 160)))
+                        if len(segs) > 1:
+                            resp.completion_text = segs[0]
+                            delay = max(0, int(self._cfg("reply_delay_ms", 1200))) / 1000
+                            for seg in segs[1:]:
+                                await asyncio.sleep(delay)
+                                await self.context.send_message(umo, MessageChain().message(seg))
+                    except Exception as e:
+                        logger.error("[astrbot_task] 分段发送失败, 回退整条: " + str(e))
+                        resp.completion_text = str(reply)
                 if self._cfg("auto_extract_enabled", False):  # 默认关: 记忆节点只来自 20 轮总结 + 「记住X」
                     users = self._user_hist.get(umo, [])
                     last_user = users[-1] if users else ""
@@ -557,7 +587,29 @@ class TaskPlugin(Star):
                         self.memory.auto_extract, umo, last_user, str(reply),
                         self._history_text(umo)))
         except Exception as e:
-            print("[astrbot_task] 回复后处理失败:", e)
+            logger.error("[astrbot_task] 回复后处理失败:", e)
+
+    def _split_reply(self, text: str, max_len: int):
+        """按句子边界把长回复切成多段(最多 4 段); 切不动就原样单段"""
+        import re as _re
+        text = str(text or "").strip()
+        if len(text) <= max_len:
+            return [text]
+        sentences = _re.findall(r"[^。！？!?\n]+[。！？!?\n]?", text)
+        segs, cur = [], ""
+        for s in sentences:
+            if cur and len(cur) + len(s) > max_len:
+                segs.append(cur.strip())
+                cur = s
+            else:
+                cur += s
+        if cur.strip():
+            segs.append(cur.strip())
+        segs = [s for s in segs if s]
+        if len(segs) <= 1:
+            # 没有句子边界可切: 定长硬切
+            segs = [text[i:i + max_len] for i in range(0, len(text), max_len)]
+        return segs[:4]
 
     # ---------- LLM 请求钩子: 两阶段召回(意图+情绪微调)+情境注入 ----------
 
@@ -596,7 +648,7 @@ class TaskPlugin(Star):
                     req.system_prompt = (req.system_prompt or "") + "\n\n" + \
                         f"【用户发来{len(imgs)}张图片, 识图结果】\n" + "\n---\n".join(descs)
             except Exception as e:
-                print("[astrbot_task] 识图流程失败:", e)
+                logger.error("[astrbot_task] 识图流程失败:", e)
 
             # 两阶段: 先让快模型判断需要回忆什么+情绪微调(9s超时, 失败降级单路); 寒暄/超短消息直接跳过省一次调用
             ctx = ""
@@ -617,7 +669,7 @@ class TaskPlugin(Star):
                     recalled.sort(key=lambda x: -x["activation"])
                     ctx = self.memory.context_text(recalled[:6])
                 except Exception as e:
-                    print("[astrbot_task] 召回意图降级单路:", e)
+                    logger.info("[astrbot_task] 召回意图降级单路:", e)
             if not ctx:
                 state, _ = self.emotion.get()
                 ctx = self.memory.context_text(self.memory.associative_recall(text, mood=state["P"], limit=5))
@@ -626,10 +678,15 @@ class TaskPlugin(Star):
             if ctx:
                 parts.append(ctx)
             parts.append(f"【当前时间】{now_str()} —— 涉及今天/明天/几点等时间推理以此为准, 不要猜测")
-            inject = "\n\n".join(parts)
-            req.system_prompt = (req.system_prompt or "") + "\n\n" + inject
+            parts.append("【回复风格】" + str(self._cfg("reply_style", "口语化、简洁、自然, 像真人发消息; 单次回复尽量短, 不要长篇大论, 不要列长清单, 不要复述工具的原始输出")))
+            # 注入走 extra_user_content_parts(临时内容): 不改 system_prompt 前缀, 不破坏 provider 的 prompt 缓存, 也不进对话历史
+            try:
+                from astrbot.core.agent.message import TextPart
+                req.extra_user_content_parts.append(TextPart(text="\n\n".join(parts)).mark_as_temp())
+            except Exception:
+                req.system_prompt = (req.system_prompt or "") + "\n\n" + "\n\n".join(parts)
         except Exception as e:
-            print("[astrbot_task] LLM 请求注入失败:", e)
+            logger.error("[astrbot_task] LLM 请求注入失败: " + str(e))
 
     _SKIP_INTENT_RE = re.compile(
         r"^(确认|取消|好的|嗯+|哦+|噢+|在吗|你好|您好|早安|晚安|早上好|下午好|晚上好|谢谢|感谢|辛苦|哈哈+|嘿嘿+|嘻嘻|嗨|hi|hello|ok|okay|拜拜|再见)"
@@ -1128,13 +1185,15 @@ class TaskPlugin(Star):
 
     @filter.llm_tool(name="quiz_me")
     async def tool_quiz_me(self, event: AstrMessageEvent, count: int = 3, category: str = ""):
-        """从题库抽题考主人: 优先抽答错过的, 其次没考过的, 最后最久没考的。把返回的题目用口吻逐个问主人,
-        先不要公布答案; 主人回答后用 record_quiz_result 记录对错, 再公布正确答案。
+        """从题库抽题考主人: 优先抽答错过的, 其次没考过的, 最后最久没考的。
+        返回的只是题目(不含答案) — 用口吻逐个问主人; 主人回答后用 answer_quiz 判分并公布结果。
+        另: 该工具的返回值会直接展示给主人, 绝对不要输出任何答案。
 
         Args:
             count(number): 抽几个, 默认 3
             category(string): 只抽某分类(如 单词), 留空=全库
         """
+        umo = event.unified_msg_origin
         sql = ("SELECT id, question, answer FROM quiz_bank "
                "WHERE (? = '' OR category = ?) "
                "ORDER BY no_count DESC, last_asked IS NULL DESC, last_asked ASC LIMIT ?")
@@ -1146,33 +1205,50 @@ class TaskPlugin(Star):
             for r in rows:
                 c.execute("UPDATE quiz_bank SET last_asked=? WHERE id=?",
                           (datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), r["id"]))
-        return json.dumps(rows, ensure_ascii=False)
+        self._pending_quiz[umo] = {str(r["id"]): r["answer"] for r in rows}
+        numbered = "\n".join(f"第{i}题: {r['question']}" for i, r in enumerate(rows, 1))
+        return (f"出好了 {len(rows)} 道题, 用口吻逐个问主人(不要提前透露答案):\n" + numbered)
 
-    @filter.llm_tool(name="record_quiz_result")
-    async def tool_record_quiz_result(self, event: AstrMessageEvent, results_json: str):
-        """记录抽查结果(主人每答完一题, 你判对错后调这个)。
+    @filter.llm_tool(name="answer_quiz")
+    async def tool_answer_quiz(self, event: AstrMessageEvent, results_json: str):
+        """判分主人的抽查回答。主人每答完一题(或全部答完), 你把题目原文和主人的回答传进来判分,
+        然后把对错和正确答案用口吻告诉主人。
 
         Args:
-            results_json(string): JSON数组, 每项 {"id":题目id, "correct":true或false}
+            results_json(string): JSON数组, 每项 {"question":"题目原文", "user_answer":"主人的回答"}
         """
+        umo = event.unified_msg_origin
         try:
             items = json.loads((results_json or "").strip())
         except Exception:
             return ("results_json 不是合法的 JSON 数组")
+        pending = self._pending_quiz.get(umo, {})
         right = wrong = 0
+        details = []
         with self._conn() as c:
             for it in items if isinstance(items, list) else []:
-                try:
-                    tid = int(it.get("id"))
-                except Exception:
+                if not isinstance(it, dict):
                     continue
-                if it.get("correct"):
+                q = str(it.get("question") or "").strip()
+                ua = str(it.get("user_answer") or "").strip()
+                rec = pending.get(q)
+                if not rec:
+                    continue
+                tid, ans = rec["id"], rec["answer"]
+                ok = ua and (ua == ans or ans.lower() in ua.lower() or ua.lower() in ans.lower())
+                if ok:
                     c.execute("UPDATE quiz_bank SET ok_count=ok_count+1, no_count=0 WHERE id=?", (tid,))
                     right += 1
+                    details.append(f"✓ {q}")
                 else:
                     c.execute("UPDATE quiz_bank SET no_count=no_count+1 WHERE id=?", (tid,))
                     wrong += 1
-        return (f"已记录: 答对 {right} · 答错 {wrong}。答错的题之后会优先再考")
+                    details.append(f"✗ {q}(正确答案: {ans})")
+                pending.pop(q, None)
+        if not details:
+            return ("没有匹配到待判分的题目 — 先用 quiz_me 出题")
+        return (f"判分完成: 答对 {right} · 答错 {wrong}。\n" + "\n".join(details)
+                + "\n答错的题之后会优先再考。")
 
     @filter.llm_tool(name="set_daily_content")
     async def tool_set_daily_content(self, event: AstrMessageEvent, enabled: str = "", topics: str = ""):
@@ -1199,5 +1275,5 @@ class TaskPlugin(Star):
         try:
             self.save_config(cfg)
         except Exception as e:
-            print("[astrbot_task] 保存内容推送配置失败:", e)
+            logger.error("[astrbot_task] 保存内容推送配置失败:", e)
         return await self._voice_result("、".join(changed) + "。每天 " + str(int(self._cfg("content_push_hour", 21))) + " 点为你找", "内容推送设置")
