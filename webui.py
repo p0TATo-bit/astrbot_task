@@ -646,6 +646,8 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
 .cal-pill .pt { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; min-width:0; }
 .cal-pill .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .cal-we { color:var(--danger); }
+#graph-wrap:fullscreen { background:var(--card); padding:14px; overflow:auto; }
+#graph-wrap:fullscreen #graph { height: calc(100vh - 120px); border-radius:0; }
 @media (max-width:800px) { .u-stats { grid-template-columns:repeat(2,1fr); } }
 </style>
 </head>
@@ -737,11 +739,14 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
             <button class="btn gmode-btn" data-m="rings" onclick="setGMode('rings')">同心圆</button>
             <button class="btn gmode-btn" data-m="timeline" onclick="setGMode('timeline')">时间轴</button>
             <button class="btn" onclick="loadGraph()">刷新</button>
+            <button class="btn primary" onclick="toggleGraphFullscreen()">全屏</button>
           </div>
         </div>
+        <div id="graph-wrap">
         <canvas id="graph" style="width:100%; height:360px; background:var(--bg); border-radius:10px; border:1px solid var(--border); cursor:pointer;"></canvas>
         <div class="meta" style="margin-top:6px;">节点大小=有效权重 · 连线=关键词连锁 · 金环★=持久层(想起≥5次晋升) · 拖动摆放 · 点击看详情 · 滚轮缩放</div>
         <div id="g-detail" style="display:none; margin-top:10px; padding:10px 12px; border:1px solid var(--border); border-radius:8px; background:var(--bg); font-size:12.5px;"></div>
+        </div>
       </div>
       <div class="card">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -1212,6 +1217,15 @@ async function saveMem() {
 let gData = null, gNodes = [], gEdges = [], gZoom = 1, gPanX = 0, gPanY = 0, gHl = null, gDrag = null;
 let gMode = 'force';
 function setGMode(m) { gMode = m; layoutGraph(); }
+function toggleGraphFullscreen() {
+  const wrap = document.getElementById('graph-wrap');
+  if (!document.fullscreenElement) {
+    (wrap.requestFullscreen || wrap.webkitRequestFullscreen || function(){}).call(wrap);
+  } else {
+    (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
+  }
+}
+document.addEventListener('fullscreenchange', () => { setTimeout(() => { try { drawGraph(); } catch (e) {} }, 60); });
 async function loadGraph() {
   gData = await api('/api/memory/graph');
   const c = document.getElementById('graph');

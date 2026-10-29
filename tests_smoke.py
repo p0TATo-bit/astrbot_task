@@ -7,12 +7,18 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 # ---- stub astrbot 宿主(测试不依赖真实 AstrBot) ----
-for m in ("astrbot", "astrbot.api", "astrbot.api.star", "astrbot.api.event", "astrbot.api.message_chain"):
+for m in ("astrbot", "astrbot.api", "astrbot.api.star", "astrbot.api.event", "astrbot.api.message_chain", "astrbot.core", "astrbot.core.agent", "astrbot.core.agent.message"):
     sys.modules.setdefault(m, types.ModuleType(m))
+sys.modules["astrbot.api"].logger = type("L", (), {"info": staticmethod(lambda *a, **k: None), "warning": staticmethod(lambda *a, **k: None), "error": staticmethod(lambda *a, **k: None)})()
 sys.modules["astrbot.api.star"].Context = object
 sys.modules["astrbot.api.star"].Star = object
 sys.modules["astrbot.api.star"].register = lambda *a, **k: (lambda cls: cls)
 sys.modules["astrbot.api.event"].AstrMessageEvent = object
+sys.modules["astrbot.api.event"].MessageChain = object
+class TextPart:
+    def __init__(self, text): self.text = text
+    def mark_as_temp(self): return self
+sys.modules["astrbot.core.agent.message"].TextPart = TextPart
 class _FM(type):
     def __getattr__(cls, n): return lambda *a, **k: (lambda f: f)
 sys.modules["astrbot.api.event"].filter = _FM("F", (), {"EventMessageType": type("E", (), {"ALL": "all"})})
@@ -82,17 +88,17 @@ conn.close()
 # ================= 2. 记忆: upsert/金环/总结存档 =================
 print("[2] memory 存取与总结")
 tmpdb = os.path.join(tempfile.mkdtemp(), "m.db")
-canned = json.dumps({"summary": "和主人聊了考试计划", "facts": [
-    {"content": "用户在备考一门重要考试", "importance": 5, "keywords": ["考试", "复习"]}]}, ensure_ascii=False)
+canned = json.dumps({"summary": "和主人聊了考研计划", "facts": [
+    {"content": "主人在准备考研408", "importance": 5, "keywords": ["考研", "408"]}]}, ensure_ascii=False)
 async def fake_llm(prompt, system=None, **kw):
     return canned
 ms = memory_mod.MemoryStore(tmpdb, llm_call=fake_llm)
 # 对话落库: 3 条未总结
 cx0 = sqlite3.connect(tmpdb)
-for role, text in [("user", "用户: 备考期末"), ("ai", "助手: 好"), ("user", "用户: 嗯")]:
+for role, text in [("user", "用户: 备考408"), ("ai", "助手: 好"), ("user", "用户: 嗯")]:
     cx0.execute("INSERT INTO chats (umo, role, text) VALUES ('u1', ?, ?)", (role, text))
 cx0.commit(); cx0.close()
-stored = ms.periodic_summary("u1", "用户: 备考期末\n助手: 好", "身份")
+stored = ms.periodic_summary("u1", "用户: 备考408\n助手: 好", "身份")
 must("facts 回灌", len(stored) == 1)
 cx = sqlite3.connect(tmpdb); cx.row_factory = sqlite3.Row
 must("总结存档", cx.execute("SELECT COUNT(*) n FROM summaries").fetchone()["n"] == 1)
@@ -101,10 +107,10 @@ must("对话已标记总结", cx.execute("SELECT COUNT(*) n FROM chats WHERE sum
 mem = cx.execute("SELECT * FROM memories").fetchone()
 must("记忆 importance=5", mem["importance"] == 5)
 cx.execute("UPDATE memories SET access_count=4 WHERE id=?", (mem["id"],)); cx.commit()
-got = ms.associative_recall("考试", limit=3)
+got = ms.associative_recall("考研", limit=3)
 row = cx.execute("SELECT access_count, pinned FROM memories WHERE id=?", (mem["id"],)).fetchone()
 must("召回+金环晋升(满5)", row["access_count"] == 5 and row["pinned"] == 1)
-r2 = ms.upsert_similar("用户在备考一门重要考试, 目标已定", "fact", 5)
+r2 = ms.upsert_similar("主人在准备考研408, 目标已定", "fact", 5)
 must("双向前缀升级覆盖", r2 and r2.get("upgraded"))
 cx.close()
 

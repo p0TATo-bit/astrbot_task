@@ -7,6 +7,12 @@ import re
 import sqlite3
 import datetime
 
+try:
+    from astrbot.api import logger
+except Exception:  # 独立运行/测试时回退标准库
+    import logging
+    logger = logging.getLogger("astrbot_task")
+
 DEFAULT_STATE = {"P": 0.1, "A": 0.3, "D": 0.4, "fatigue": 0.2, "frustration": 0.1}
 DEFAULT_RELATION = {"trust": 0.5, "task_liking": 0.7, "social_liking": 0.5}
 # 关系层无上限(满1=羁绊, 数值继续累积); 状态层 ±1 / 0-1
@@ -140,7 +146,7 @@ class EmotionEngine:
         if changed:
             self._save(state, relation)
             self._log(state, label)
-            print("[astrbot_task]", label + ":", json.dumps(adj, ensure_ascii=False))
+            logger.info("[astrbot_task] " + label + ": " + json.dumps(adj, ensure_ascii=False))
         return changed > 0
 
     def build_context(self) -> str:
