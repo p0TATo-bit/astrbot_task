@@ -1100,6 +1100,40 @@ class TaskPlugin(Star):
         except Exception as e:
             return await self._voice_result(f"写笔记失败: {e}", "写笔记失败")
 
+    @filter.llm_tool(name="send_document")
+    async def tool_send_document(self, event: AstrMessageEvent, title: str, content: str):
+        """把整理好的内容(日程表/课表/复习提纲/清单等)生成 markdown 文档, 以文件消息发给主人, 同时存入笔记存档。主人说"做成文档发给我/生成文档发我"时用。
+
+        Args:
+            title(string): 文档标题
+            content(string): markdown 正文
+        """
+        umo = event.unified_msg_origin
+        try:
+            path, _ = skills_mod.write_note(self.db_path, title, content)
+        except Exception as e:
+            return await self._voice_result(f"文档生成失败: {e}", "文档失败")
+        filename = skills_mod.safe_title(title) + ".md"
+        sent = False
+        try:
+            from astrbot.api.message_components import File
+            from astrbot.api.event import MessageChain
+            chain = MessageChain(chain=[File(name=filename, file=path)])
+            await self.context.send_message(umo, chain)
+            sent = True
+        except Exception as e:
+            logger.error("[astrbot_task] 文档文件发送失败, 回退文本: " + str(e))
+        if sent:
+            return await self._voice_result(
+                f"文档「{title}」已生成发给你({len(str(content))} 字), 同时存进笔记了", "文档发送")
+        try:
+            await self.context.send_message(umo, MessageChain().message(str(content)[:3000]))
+            return await self._voice_result(
+                f"文档「{title}」生成好了(这个平台发文件受限, 正文直接发你), 也存进笔记了", "文档发送")
+        except Exception:
+            return await self._voice_result(
+                f"文档「{title}」已生成并存进笔记, WebUI 文档页可查", "文档发送")
+
     @filter.llm_tool(name="list_notes")
     async def tool_list_notes(self, event: AstrMessageEvent):
         """列出所有已保存的笔记标题。主人问"我有哪些笔记/文档"时用。结果仅供你参考, 用口吻总结, 不要原样复述。
