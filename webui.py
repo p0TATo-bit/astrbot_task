@@ -121,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._safe(e)
 
     def _safe(self, e):
-        logger.error("[astrbot_task] WebUI 请求处理失败:", e)
+        logger.error("[astrbot_task] WebUI 请求处理失败: %s", e)
         try:
             return self._json({"error": str(e)}, 500)
         except Exception:

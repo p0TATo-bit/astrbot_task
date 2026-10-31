@@ -128,7 +128,7 @@ class TaskPlugin(Star):
             self.save_config(self._config)
             logger.info("[astrbot_task] 配置已迁移为分组结构(大项套小项)")
         except Exception as e:
-            logger.error("[astrbot_task] 配置迁移保存失败(运行时仍生效):", e)
+            logger.error("[astrbot_task] 配置迁移保存失败(运行时仍生效): %s", e)
 
     def _cfg(self, key: str, default=None):
         """读配置: 兼容迁移前的扁平键与迁移后的分组键"""
@@ -152,7 +152,7 @@ class TaskPlugin(Star):
         try:
             await self.context.send_message(umo, MessageChain().message(text))
         except Exception as e:
-            logger.error("[astrbot_task] 推送失败:", e)
+            logger.error("[astrbot_task] 推送失败: %s", e)
 
     async def persona_notify(self, kind: str, facts: str, fallback: str) -> str:
         """人格口吻生成(失败回退模板)——提醒/主动关心共用"""
@@ -164,7 +164,7 @@ class TaskPlugin(Star):
                 kind="notify")
             return text.strip() or fallback
         except Exception as e:
-            logger.error("[astrbot_task]", kind, "口吻生成失败, 用模板:", e)
+            logger.error("[astrbot_task] %s 口吻生成失败, 用模板: %s", kind, e)
             return fallback
 
     # ---------- LLM 调用(走 AstrBot provider) ----------
@@ -193,7 +193,7 @@ class TaskPlugin(Star):
                 self._record_usage(kind, admin, resp, int((time.time() - t0) * 1000))
                 return resp.completion_text or ""
             except Exception as e:
-                logger.error(f"[astrbot_task] 管理模型 {admin} 调用失败, 回退聊天模型:", e)
+                logger.error(f"[astrbot_task] 管理模型 {admin} 调用失败, 回退聊天模型: {e}")
                 self._record_usage(kind, admin, None, int((time.time() - t0) * 1000), ok=0)
         umo = self._last_umo
         provider_id = await self.context.get_current_chat_provider_id(umo=umo) if umo else None
@@ -236,7 +236,7 @@ class TaskPlugin(Star):
                     "VALUES (?,?,?,?,?,?,?,?)",
                     (kind, provider or "", str(model or "")[:80], pt, ct, tt, duration_ms, ok))
         except Exception as e:
-            logger.error("[astrbot_task] 记录调用统计失败:", e)
+            logger.error("[astrbot_task] 记录调用统计失败: %s", e)
 
     async def _voice_result(self, raw: str, scene: str = "任务结果") -> str:
         """工具结果转人格口吻短句(走管理模型); 关闭或失败回退原文"""
@@ -253,7 +253,7 @@ class TaskPlugin(Star):
                 c.execute("DELETE FROM task_snapshots WHERE id NOT IN "
                           "(SELECT id FROM task_snapshots ORDER BY id DESC LIMIT 30)")
         except Exception as e:
-            logger.error("[astrbot_task] 快照失败:", e)
+            logger.error("[astrbot_task] 快照失败: %s", e)
 
     def _do_undo(self, steps: int) -> str:
         """回退最近 n 步任务变更, 返回给用户看的结果文本"""
@@ -277,7 +277,7 @@ class TaskPlugin(Star):
             self._background.append(task)
             self._background = [t for t in self._background if not t.done()][-20:]
         except Exception as e:
-            logger.error("[astrbot_task] 后台任务投递失败:", e)
+            logger.error("[astrbot_task] 后台任务投递失败: %s", e)
 
     async def terminate(self):
         """插件卸载/重载时由 AstrBot 调用(await): 停调度循环与 WebUI 线程"""
@@ -535,7 +535,7 @@ class TaskPlugin(Star):
             with self._conn() as c:
                 c.execute("INSERT INTO chats (umo, role, text) VALUES (?,?,?)", (umo, "user", text[:2000]))
         except Exception as e:
-            logger.error("[astrbot_task] 对话记录失败:", e)
+            logger.error("[astrbot_task] 对话记录失败: %s", e)
         rounds = self.memory.bump_round(umo)
         if rounds > 0 and rounds % 20 == 0:
             # 满20轮: 后台生成周期总结(对话文本=双方最近各20条 zip)
@@ -561,7 +561,7 @@ class TaskPlugin(Star):
                     with self._conn() as c:
                         c.execute("INSERT INTO chats (umo, role, text) VALUES (?,?,?)", (umo, "ai", str(reply)[:2000]))
                 except Exception as e:
-                    logger.error("[astrbot_task] 对话记录失败:", e)
+                    logger.error("[astrbot_task] 对话记录失败: %s", e)
                 # 分段发送: 长回复按句子切成多条消息, 模拟真人连发(失败回退整条)
                 if self._cfg("reply_split_enabled", True):
                     try:
@@ -582,7 +582,7 @@ class TaskPlugin(Star):
                         self.memory.auto_extract, umo, last_user, str(reply),
                         self._history_text(umo)))
         except Exception as e:
-            logger.error("[astrbot_task] 回复后处理失败:", e)
+            logger.error("[astrbot_task] 回复后处理失败: %s", e)
 
     def _split_reply(self, text: str, max_len: int):
         """按句子边界把长回复切成多段(最多 4 段); 切不动就原样单段"""
@@ -643,7 +643,7 @@ class TaskPlugin(Star):
                     req.system_prompt = (req.system_prompt or "") + "\n\n" + \
                         f"【用户发来{len(imgs)}张图片, 识图结果】\n" + "\n---\n".join(descs)
             except Exception as e:
-                logger.error("[astrbot_task] 识图流程失败:", e)
+                logger.error("[astrbot_task] 识图流程失败: %s", e)
 
             # 两阶段: 先让快模型判断需要回忆什么+情绪微调(9s超时, 失败降级单路); 寒暄/超短消息直接跳过省一次调用
             ctx = ""
@@ -664,7 +664,7 @@ class TaskPlugin(Star):
                     recalled.sort(key=lambda x: -x["activation"])
                     ctx = self.memory.context_text(recalled[:6])
                 except Exception as e:
-                    logger.info("[astrbot_task] 召回意图降级单路:", e)
+                    logger.info("[astrbot_task] 召回意图降级单路: %s", e)
             if not ctx:
                 state, _ = self.emotion.get()
                 ctx = self.memory.context_text(self.memory.associative_recall(text, mood=state["P"], limit=5))
@@ -1304,5 +1304,5 @@ class TaskPlugin(Star):
         try:
             self.save_config(cfg)
         except Exception as e:
-            logger.error("[astrbot_task] 保存内容推送配置失败:", e)
+            logger.error("[astrbot_task] 保存内容推送配置失败: %s", e)
         return await self._voice_result("、".join(changed) + "。每天 " + str(int(self._cfg("content_push_hour", 21))) + " 点为你找", "内容推送设置")

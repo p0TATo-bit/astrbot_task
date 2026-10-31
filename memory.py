@@ -373,9 +373,9 @@ class MemoryStore:
             if kws:
                 with self._conn() as c:
                     c.execute("UPDATE memories SET keywords = ? WHERE id = ?", (json.dumps(kws, ensure_ascii=False), mid))
-                logger.info("[astrbot_task] AI关键词精修:", "、".join(kws))
+                logger.info("[astrbot_task] AI关键词精修: %s", "、".join(kws))
         except Exception as e:
-            logger.error("[astrbot_task] 关键词精修失败(保留启发式):", e)
+            logger.error("[astrbot_task] 关键词精修失败(保留启发式): %s", e)
 
     def auto_extract(self, umo, user_message, ai_response, recent_context=""):
         """后台自动提取(仅 importance>=4): 由调用方放异步任务"""
@@ -419,7 +419,7 @@ facts 严禁记成: 助手自己说的话或发现的问题、关于系统本身
         try:
             text = asyncio.run(_run())
         except Exception as e:
-            logger.error("[astrbot_task] 记忆 LLM 调用失败:", e)
+            logger.error("[astrbot_task] 记忆 LLM 调用失败: %s", e)
             return []
 
         m = re.search(r"\{[\s\S]*\}", text or "") if is_summary else re.search(r"\[[\s\S]*\]", text or "")
@@ -443,7 +443,7 @@ facts 严禁记成: 助手自己说的话或发现的问题、关于系统本身
                         c.execute("UPDATE chats SET summarized=1 WHERE umo=? AND summarized=0", (umo,))
                     except Exception:
                         pass
-                logger.info("[astrbot_task] 周期总结已存档:", summary_text[:40], "...")
+                logger.info("[astrbot_task] 周期总结已存档: %s...", summary_text[:40])
             facts = parsed.get("facts") or []
             for f in facts[:5]:
                 content = str(f.get("content") or "").strip()
@@ -471,7 +471,7 @@ facts 严禁记成: 助手自己说的话或发现的问题、关于系统本身
                     with self._conn() as c:
                         c.execute("UPDATE memories SET keywords=? WHERE id=?", (json.dumps(it["keywords"][:6], ensure_ascii=False), r["id"]))
         if stored:
-            logger.info("[astrbot_task] 自动提取:", " | ".join(stored))
+            logger.info("[astrbot_task] 自动提取: %s", " | ".join(stored))
         return stored
 
 
