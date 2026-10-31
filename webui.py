@@ -6,7 +6,6 @@ import json
 import sqlite3
 import threading
 import datetime
-import sys
 import importlib
 from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1418,13 +1417,6 @@ function showNode(n) {
     ['类型 ' + n.type, '重要度 ' + n.importance, '有效权重 ' + n.eff, '强度 ' + n.intensity, '愉悦价 ' + n.valence,
      n.pinned ? '★ 持久层' : '距晋升 ' + toPin + ' 次回想', '被想起 ' + (n.access_count||0) + ' 次']
       .map(x => `<span class="tag">${esc(x)}</span>`).join(' ');
-}
-function addMemory() {
-  const content = prompt('记忆内容(第一人称, 如: 主人每周三下午有实验室组会):');
-  if (!content) return;
-  const importance = parseInt(prompt('重要性 1-5(核心给4-5):', '4') || '4');
-  api('/api/memories', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ content, memory_type:'fact', importance }) }).then(() => { loadMems(''); loadGraph(); });
 }
 
 /* ===== 情绪 ===== */

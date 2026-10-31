@@ -5,10 +5,8 @@
 # 历史独立存 selfchat_msg 表(含推送), 不与 chats 表(总结用)混写。无第三方依赖。
 
 import asyncio
-import datetime
 import http.server
 import json
-import os
 import secrets
 import sqlite3
 import threading
@@ -168,10 +166,6 @@ if (TK) {
 </script>
 </body>
 </html>"""
-
-
-def _now() -> str:
-    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 class ChatStore:

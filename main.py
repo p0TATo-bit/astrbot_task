@@ -15,7 +15,7 @@ import datetime
 import asyncio
 from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.api.event import filter, AstrMessageEvent, MessageChain
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,7 +28,6 @@ _LEGACY_DIRS = [  # 历史数据位置(按新到旧), 首次启动自动迁移�
     os.path.join(os.path.dirname(os.path.dirname(_HERE)), "astrbot_task_data"),  # v0.8.x 的过渡位置
     _HERE,  # v0.7.x 之前: 数据直接在插件目录里
 ]
-_LEGACY_DB = os.path.join(_HERE, "data.db")
 DB_PATH = os.path.join(_DATA_DIR, "data.db")
 
 # 兄弟模块必须经 _fresh 导入, 且 main 被导入时统一清一次缓存:
@@ -1019,7 +1018,6 @@ class TaskPlugin(Star):
         content = content.strip()
         if len(content) < 4:
             return ("content 过短, 不存储")
-            return
         affect = memory_mod.estimate_affect(content)
         r = self.memory.upsert_similar(
             content, memory_type if memory_type in ("fact", "preference", "task_context") else "fact",

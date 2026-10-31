@@ -4,8 +4,6 @@
 # 判定逻辑全部纯函数化(便于测试); 推送走注入的 send 回调(封装 AstrBot send_message)。
 
 import os
-import re
-import sys
 import random
 import sqlite3
 import datetime
