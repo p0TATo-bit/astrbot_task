@@ -1241,25 +1241,34 @@ async function loadGraph() {
   const byId = Object.fromEntries(gNodes.map(n => [n.id, n]));
   gEdges = (gData.edges || []).map(e => ({...e, na: byId[e.a], nb: byId[e.b]})).filter(e => e.na && e.nb);
   layoutGraph();
-  const wMax = Math.max(0.001, ...gEdges.map(e => e.w));
-  for (let it = 0; it < 300 && gMode === 'force'; it++) {
+}
+function nodeR(n) { return 5 + (n.eff || 3) * 2.4; }
+/* 碰撞松弛: 反复推开重叠节点(半径+标签余量), 任何模式下都不黏连 */
+function relaxCollisions(w, h, passes) {
+  for (let p = 0; p < (passes || 60); p++) {
+    let moved = false;
     for (let i = 0; i < gNodes.length; i++) for (let j = i+1; j < gNodes.length; j++) {
       const a = gNodes[i], b = gNodes[j];
-      let dx = b.x-a.x, dy = b.y-a.y; const d2 = dx*dx+dy*dy+0.01, d = Math.sqrt(d2), rep = 2600/d2;
-      dx/=d; dy/=d; a.vx-=dx*rep; a.vy-=dy*rep; b.vx+=dx*rep; b.vy+=dy*rep;
+      let dx = b.x-a.x, dy = b.y-a.y, d = Math.sqrt(dx*dx + dy*dy);
+      const want = nodeR(a) + nodeR(b) + 42;
+      if (d >= want) continue;
+      if (d < 0.01) { const t = i*2.4+j; dx = Math.cos(t); dy = Math.sin(t); d = Math.sqrt(dx*dx+dy*dy); }
+      const push = (want - d) / 2 + 0.5;
+      dx /= d; dy /= d;
+      a.x -= dx*push; a.y -= dy*push; b.x += dx*push; b.y += dy*push;
+      moved = true;
     }
-    for (const e of gEdges) {
-      const a = e.na, b = e.nb;
-      let dx = b.x-a.x, dy = b.y-a.y; const d = Math.sqrt(dx*dx+dy*dy)+0.01;
-      const f = (d - (80+70*(1-e.w/wMax)))*0.02; dx/=d; dy/=d;
-      a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
-    }
-    for (const n of gNodes) {
-      n.vx += (c.clientWidth/2-n.x)*0.002; n.vy += (180-n.y)*0.002; n.vx*=0.85; n.vy*=0.85;
-      n.x = Math.max(26, Math.min(c.clientWidth-26, n.x+n.vx)); n.y = Math.max(20, Math.min(340, n.y+n.vy));
-    }
+    for (const nd of gNodes) { nd.x = Math.max(26, Math.min(w-26, nd.x)); nd.y = Math.max(24, Math.min(h-24, nd.y)); }
+    if (!moved) break;
   }
-  drawGraph();
+}
+function fitCanvas(w, h, pad) {
+  const xs = gNodes.map(nd => nd.x), ys = gNodes.map(nd => nd.y);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const bw = Math.max(1, maxx-minx), bh = Math.max(1, maxy-miny);
+  const sc = Math.min((w-pad*2)/bw, (h-pad*2)/bh, 3);
+  const ox = (w - bw*sc)/2, oy = (h - bh*sc)/2;
+  for (const nd of gNodes) { nd.x = ox + (nd.x-minx)*sc; nd.y = oy + (nd.y-miny)*sc; }
 }
 function layoutGraph() {
   const c = document.getElementById('graph');
@@ -1267,40 +1276,65 @@ function layoutGraph() {
   const n = gNodes.length;
   if (!n) return;
   if (gMode === 'force') {
-    const spread = Math.max(1, Math.sqrt(n / 8));
+    // 确定性初始摆位(黄金角螺旋), 避免全零退化
+    for (let i = 0; i < n; i++) {
+      const nd = gNodes[i], a = i * 2.39996, rr = 22 * Math.sqrt(i);
+      nd.x = w/2 + Math.cos(a)*rr; nd.y = h/2 + Math.sin(a)*rr; nd.vx = 0; nd.vy = 0;
+    }
     const wMax = Math.max(0.001, ...gEdges.map(e => e.w));
-    for (let i = 0; i < gNodes.length; i++) for (let j = i+1; j < gNodes.length; j++) {
-      const a = gNodes[i], b = gNodes[j];
-      let dx = b.x-a.x, dy = b.y-a.y; const d2 = dx*dx+dy*dy+0.01, d = Math.sqrt(d2), rep = 2600*spread*spread/d2;
-      dx/=d; dy/=d; a.vx-=dx*rep; a.vy-=dy*rep; b.vx+=dx*rep; b.vy+=dy*rep;
-    }
-    for (const e of gEdges) {
-      const a = e.na, b = e.nb;
-      let dx = b.x-a.x, dy = b.y-a.y; const d = Math.sqrt(dx*dx+dy*dy)+0.01;
-      const rest = (80+70*(1-e.w/wMax))*spread; const f = (d - rest)*0.02; dx/=d; dy/=d;
-      a.vx+=dx*f; a.vy+=dy*f; b.vx-=dx*f; b.vy-=dy*f;
-    }
-    for (const nd of gNodes) { nd.vx*=0.85; nd.vy*=0.85; nd.x+=nd.vx; nd.y+=nd.vy; }
-    // 归一化铺满画布: 记忆多时自动放大散布, 不再挤成一团
-    const xs = gNodes.map(nd => nd.x), ys = gNodes.map(nd => nd.y);
-    const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
-    const bw = Math.max(1, maxx-minx), bh = Math.max(1, maxy-miny);
-    const pad = 30, sc = Math.min((w-60)/bw, (h-60)/bh, 3);
-    const ox = (w - bw*sc)/2, oy = (h - bh*sc)/2;
-    for (const nd of gNodes) { nd.x = ox + (nd.x-minx)*sc; nd.y = oy + (nd.y-miny)*sc; }
-  } else if (gMode === 'rings') {
-    // 同心圆: 金环/高权重居内, 越外层越次要
-    const sorted = [...gNodes].sort((a, b) => (b.pinned - a.pinned) || ((b.eff || 3) - (a.eff || 3)));
-    let idx = 0;
-    for (let ring = 0; idx < sorted.length; ring++) {
-      const count = Math.min(sorted.length - idx, ring === 0 ? 5 : 6 + ring * 3);
-      const rad = ring === 0 ? 0 : Math.min(60 + (ring - 1) * 80, Math.min(w, h) / 2 - 45);
-      for (let i = 0; i < count && idx < sorted.length; i++, idx++) {
-        const nd = sorted[idx];
-        if (ring === 0) { nd.x = w/2; nd.y = h/2; }
-        else { const a = (i / count) * Math.PI*2 - Math.PI/2; nd.x = w/2 + Math.cos(a)*rad; nd.y = h/2 + Math.sin(a)*rad*0.72; }
+    const spread = Math.max(1, Math.sqrt(n / 6));
+    const iters = 220;
+    for (let it = 0; it < iters; it++) {
+      const cool = 1 - it / iters;
+      for (let i = 0; i < n; i++) for (let j = i+1; j < n; j++) {
+        const a = gNodes[i], b = gNodes[j];
+        let dx = b.x-a.x, dy = b.y-a.y;
+        const d2 = dx*dx + dy*dy + 4, d = Math.sqrt(d2);
+        const rep = (2600 * spread) / d2;
+        dx /= d; dy /= d;
+        a.vx -= dx*rep; a.vy -= dy*rep; b.vx += dx*rep; b.vy += dy*rep;
+      }
+      for (const e of gEdges) {
+        const a = e.na, b = e.nb;
+        let dx = b.x-a.x, dy = b.y-a.y;
+        const d = Math.sqrt(dx*dx + dy*dy) + 0.01;
+        const f = (d - (110 + 60*(1 - e.w/wMax)) * spread) * 0.012;
+        dx /= d; dy /= d;
+        a.vx += dx*f; a.vy += dy*f; b.vx -= dx*f; b.vy -= dy*f;
+      }
+      for (const nd of gNodes) {
+        nd.vx += (w/2 - nd.x) * 0.004; nd.vy += (h/2 - nd.y) * 0.004;
+        nd.vx *= 0.82; nd.vy *= 0.82;
+        const sp = Math.sqrt(nd.vx*nd.vx + nd.vy*nd.vy), cap = 14 * cool + 2;
+        if (sp > cap) { nd.vx *= cap/sp; nd.vy *= cap/sp; }
+        nd.x += nd.vx; nd.y += nd.vy;
       }
     }
+    fitCanvas(w, h, 30);
+    relaxCollisions(w, h, 80);
+  } else if (gMode === 'rings') {
+    // 同心圆: 中心放最高权重 1 个节点, 其余按环均分; 环半径按"弧长 ≥ 节点数×间距"自增, 不再封顶撞环
+    const sorted = [...gNodes].sort((a, b) => (b.pinned - a.pinned) || ((b.eff || 3) - (a.eff || 3)));
+    sorted[0].x = w/2; sorted[0].y = h/2;
+    const gap = 78;
+    const rings = [];
+    let rest = n - 1;
+    for (let ring = 0; rest > 0; ring++) {
+      const count = Math.min(rest, 6 + ring * 3);
+      const rad = Math.max(90 + ring * 40, count * gap / (2 * Math.PI));
+      rings.push({ count, rad, off: ring * 0.55 });
+      rest -= count;
+    }
+    let idx = 1;
+    for (const r of rings) {
+      for (let i = 0; i < r.count && idx < n; i++, idx++) {
+        const nd = sorted[idx], a = (i / r.count) * Math.PI*2 - Math.PI/2 + r.off;
+        nd.x = w/2 + Math.cos(a) * r.rad;
+        nd.y = h/2 + Math.sin(a) * r.rad * 0.8;
+      }
+    }
+    fitCanvas(w, h, 34);
+    relaxCollisions(w, h, 60);
   } else {
     // 时间轴: 按创建时间从左到右
     const sorted = [...gNodes].sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
@@ -1309,6 +1343,7 @@ function layoutGraph() {
       nd.x = 55 + t * (w - 110);
       nd.y = 45 + ((i * 47) % (h - 90));
     });
+    relaxCollisions(w, h, 40);
   }
   drawGraph();
 }
