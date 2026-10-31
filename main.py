@@ -66,6 +66,9 @@ _REPLY_STYLE_V1 = "口语化、简洁、自然, 像真人发消息; 单次回复
 _REPLY_STYLE_V2 = ("每次回复至多三句话；简单的回答尽可能保持在 1~2 句，并尽可能保持口语化与简洁化。"
                    "回复长度和语气应该与当前对话节奏相匹配，必须使用简体中文进行回复，话语符合社交媒体交流习惯。"
                    "当你需要解决复杂问题或进行详细说明时，可以无视这一要求。")
+# 每轮人格提醒(通用版): 具体人设请主人在配置里写一句话浓缩版, 效果更佳
+_PERSONA_REMINDER = ("无论回复多短, 始终保持你当前人格的身份、说话口吻与对主人的称呼习惯, "
+                     "不要切换成通用AI助手的腔调。")
 
 
 def today_str() -> str:
@@ -722,6 +725,13 @@ class TaskPlugin(Star):
             if ctx:
                 parts.append(ctx)
             parts.append(f"【当前时间】{now_str()} —— 涉及今天/明天/几点等时间推理以此为准, 不要猜测")
+            rem = str(self._cfg("persona_reminder", "") or "").strip()
+            if rem.lower() in ("off", "no", "关闭", "关"):
+                pass  # 主人显式关闭人格提醒
+            else:
+                if not rem:
+                    rem = _PERSONA_REMINDER  # 未设置 → 内置通用提醒, 防长对话/工具调用后出戏
+                parts.append("【人格提醒】" + rem)
             style = str(self._cfg("reply_style", "") or "").strip()
             if not style or style == _REPLY_STYLE_V1:
                 style = _REPLY_STYLE_V2  # 旧默认/未设置 → 用 v2 提示词
