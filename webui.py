@@ -1533,7 +1533,7 @@ const SETTING_FIELDS = [
   { g: 'reply', k: 'reply_split_enabled', label: '长回复分段发送', type: 'bool' },
   { g: 'reply', k: 'reply_max_len', label: '分段阈值(字符)', type: 'num' },
   { g: 'reply', k: 'reply_delay_ms', label: '分段间隔(毫秒)', type: 'num' },
-  { g: 'reply', k: 'reply_style', label: '回复风格提示', type: 'text' },
+  { g: 'reply', k: 'reply_style', label: '回复风格提示(留空=内置默认)', type: 'area' },
   { g: 'admin', k: 'auto_extract_enabled', label: '每轮自动提取记忆(默认关)', type: 'bool' },
   { g: 'admin', k: 'tool_voice_enabled', label: '工具结果口吻播报', type: 'bool' },
 ];
@@ -1546,6 +1546,8 @@ async function loadSettings() {
     const id = `sf_${f.g}_${f.k}`;
     const ctl = f.type === 'bool'
       ? `<input type="checkbox" id="${id}" ${v === true || v === 'true' ? 'checked' : ''}>`
+      : f.type === 'area'
+      ? `<textarea id="${id}" rows="4" style="flex:1; max-width:520px; font-size:12.5px; line-height:1.5; padding:6px 9px; border:1px solid var(--border); border-radius:8px; background:var(--bg); color:var(--text); resize:vertical;">${esc(String(v))}</textarea>`
       : `<input type="${f.type === 'num' ? 'number' : 'text'}" id="${id}" value="${esc(String(v))}" step="any">`;
     return `<div class="row"><span style="width:240px; font-size:13px;">${esc(f.label)}</span>${ctl}</div>`;
   }).join('');

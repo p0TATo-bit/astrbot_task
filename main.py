@@ -61,6 +61,12 @@ tasks_core = _fresh("tasks_core")
 
 WEEKDAY_CN = "日一二三四五六"
 
+# 回复风格提示(v2, 主人定稿): 旧默认值在读取时自动升级, 主人没自定义过就不用动面板
+_REPLY_STYLE_V1 = "口语化、简洁、自然, 像真人发消息; 单次回复尽量短, 不要长篇大论, 不要列长清单, 不要复述工具的原始输出"
+_REPLY_STYLE_V2 = ("每次回复至多三句话；简单的回答尽可能保持在 1~2 句，并尽可能保持口语化与简洁化。"
+                   "回复长度和语气应该与当前对话节奏相匹配，必须使用简体中文进行回复，话语符合社交媒体交流习惯。"
+                   "当你需要解决复杂问题或进行详细说明时，可以无视这一要求。")
+
 
 def today_str() -> str:
     return datetime.date.today().isoformat()
@@ -716,7 +722,10 @@ class TaskPlugin(Star):
             if ctx:
                 parts.append(ctx)
             parts.append(f"【当前时间】{now_str()} —— 涉及今天/明天/几点等时间推理以此为准, 不要猜测")
-            parts.append("【回复风格】" + str(self._cfg("reply_style", "口语化、简洁、自然, 像真人发消息; 单次回复尽量短, 不要长篇大论, 不要列长清单, 不要复述工具的原始输出")))
+            style = str(self._cfg("reply_style", "") or "").strip()
+            if not style or style == _REPLY_STYLE_V1:
+                style = _REPLY_STYLE_V2  # 旧默认/未设置 → 用 v2 提示词
+            parts.append("【回复风格】" + style)
             # 注入走 extra_user_content_parts(临时内容): 不改 system_prompt 前缀, 不破坏 provider 的 prompt 缓存, 也不进对话历史
             try:
                 from astrbot.core.agent.message import TextPart
