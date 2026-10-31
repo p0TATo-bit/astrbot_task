@@ -1515,6 +1515,7 @@ async function delDoc(t) {
 /* ===== 设置: 插件配置可视化编辑 ===== */
 const SETTING_FIELDS = [
   { g: 'push', k: 'push_enabled', label: '启用定时推送', type: 'bool' },
+  { g: 'push', k: 'push_also_selfchat', label: '推送同时发到手机聊天', type: 'bool' },
   { g: 'push', k: 'upcoming_minutes', label: '课前提醒提前量(分钟)', type: 'num' },
   { g: 'push', k: 'owner_umo', label: '推送目标 UMO(留空=自动)', type: 'text' },
   { g: 'proactive', k: 'proactive_enabled', label: '启用主动关心', type: 'bool' },

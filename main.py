@@ -75,6 +75,8 @@ _REPLY_STYLE_V2 = ("每次回复至多三句话；简单的回答尽可能保持
 # 每轮人格提醒(通用版): 具体人设请主人在配置里写一句话浓缩版, 效果更佳
 _PERSONA_REMINDER = ("无论回复多短, 始终保持你当前人格的身份、说话口吻与对主人的称呼习惯, "
                      "不要切换成通用AI助手的腔调。")
+# 手机聊天(selfchat 平台)固定会话: 推送双通道的目标
+_SELFCHAT_UMO = "selfchat:FriendMessage:phone"
 
 
 def today_str() -> str:
@@ -203,15 +205,20 @@ class TaskPlugin(Star):
         return (self._cfg("owner_umo") or "").strip() or self._last_umo or ""
 
     async def push(self, text: str):
-        """主动推送消息到配置/最近会话"""
+        """主动推送消息到配置/最近会话; push_also_selfchat 开时同时发一份到手机聊天入口"""
         umo = self._target_umo()
         if not umo:
             logger.info("[astrbot_task] 推送跳过: 没有可用的会话目标(先和机器人聊一句即可)")
-            return
-        try:
-            await self.context.send_message(umo, MessageChain().message(text))
-        except Exception as e:
-            logger.error("[astrbot_task] 推送失败: %s", e)
+        else:
+            try:
+                await self.context.send_message(umo, MessageChain().message(text))
+            except Exception as e:
+                logger.error("[astrbot_task] 推送失败: %s", e)
+        if self._cfg("push_also_selfchat", True) and umo != _SELFCHAT_UMO:
+            try:
+                await self.context.send_message(_SELFCHAT_UMO, MessageChain().message(text))
+            except Exception as e:
+                logger.info("[astrbot_task] 手机聊天未收到推送(selfchat 平台未启用?): %s", e)
 
     async def persona_notify(self, kind: str, facts: str, fallback: str) -> str:
         """人格口吻生成(失败回退模板)——提醒/主动关心共用"""
