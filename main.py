@@ -8,6 +8,7 @@ import sys
 import json
 import time
 import shutil
+import importlib
 import collections
 import sqlite3
 import datetime
@@ -30,11 +31,33 @@ _LEGACY_DIRS = [  # 历史数据位置(按新到旧), 首次启动自动迁移�
 _LEGACY_DB = os.path.join(_HERE, "data.db")
 DB_PATH = os.path.join(_DATA_DIR, "data.db")
 
-import emotion as emotion_mod
-import memory as memory_mod
-import scheduler as scheduler_mod
-import skills as skills_mod
-import tasks_core
+# 兄弟模块必须经 _fresh 导入, 且 main 被导入时统一清一次缓存:
+# AstrBot 重装/重载只清理 data.plugins.<插件名>.* 的托管模块名, 裸名(import scheduler)
+# 的旧字节码会一直留在 sys.modules——曾把旧版坏代码喂给新装版本, 插件加载即崩。
+_SIBLING_MODULES = ("emotion", "memory", "scheduler", "skills", "tasks_core", "webui", "vision")
+
+
+def _purge_siblings():
+    pkg = __package__ or ""  # AstrBot 托管: data.plugins.astrbot_task; 独立运行/测试为空
+    for n in _SIBLING_MODULES:
+        sys.modules.pop(f"{pkg}.{n}" if pkg else n, None)
+        if pkg:
+            sys.modules.pop(n, None)  # 更早版本用裸名导入的残留
+
+
+_purge_siblings()
+
+
+def _fresh(name):
+    pkg = __package__ or ""
+    return importlib.import_module(f"{pkg}.{name}" if pkg else name)
+
+
+emotion_mod = _fresh("emotion")
+memory_mod = _fresh("memory")
+scheduler_mod = _fresh("scheduler")
+skills_mod = _fresh("skills")
+tasks_core = _fresh("tasks_core")
 
 WEEKDAY_CN = "日一二三四五六"
 
@@ -49,9 +72,9 @@ def now_str() -> str:
 
 
 class TaskPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
-        self._config = self.config if hasattr(self, "config") else {}
+        self._config = config if config is not None else (self.config if hasattr(self, "config") else {})
         try:
             os.makedirs(_DATA_DIR, exist_ok=True)
             if not os.path.exists(DB_PATH):
@@ -86,7 +109,7 @@ class TaskPlugin(Star):
         self._pending_quiz = {}  # umo -> {题目原文: {"id":.., "answer":..}} 进行中的抽查
         # 内嵌 WebUI: 宿主按文件路径加载 main.py, 插件目录不在 sys.path——手动加入后才能 import 兄弟模块
         try:
-            import webui
+            webui = _fresh("webui")
             webui.start(DB_PATH,
                         int(self._cfg("webui_port") or 6187),
                         (self._cfg("webui_host") or "").strip() or "0.0.0.0",
@@ -96,7 +119,10 @@ class TaskPlugin(Star):
             logger.error("[astrbot_task] WebUI 启动失败(任务/记忆功能不受影响): " + str(e))
         # 定时调度(提醒/过期汇总/主动关心/计划推送/备份)
         self.scheduler = scheduler_mod.Scheduler(self)
-        self.scheduler.start()
+        try:
+            self.scheduler.start()
+        except Exception as e:
+            logger.error("[astrbot_task] 调度器启动失败(提醒推送暂不可用): %s", e)
 
     # ---------- 推送 ----------
 
@@ -139,6 +165,24 @@ class TaskPlugin(Star):
             if isinstance(g, dict) and key in g:
                 return g[key]
         return default
+
+    def save_config(self, new_cfg=None):
+        """把运行时配置落盘(配置迁移/WebUI 设置页共用)。
+        AstrBot 传入的 config 是 AstrBotConfig(dict 子类): 原地更新后调它的 save_config();
+        独立运行/测试传进来的是普通 dict 时只更新内存。"""
+        cfg = self._config
+        if new_cfg is not None and new_cfg is not cfg:
+            if isinstance(cfg, dict):
+                cfg.clear()
+                cfg.update(new_cfg)
+            else:
+                self._config = new_cfg
+                cfg = new_cfg
+        if hasattr(cfg, "save_config"):
+            try:
+                cfg.save_config()
+            except Exception as e:
+                logger.error("[astrbot_task] 配置写入失败(运行时仍生效): %s", e)
 
     def _target_umo(self) -> str:
         return (self._cfg("owner_umo") or "").strip() or self._last_umo or ""
@@ -287,8 +331,7 @@ class TaskPlugin(Star):
         except Exception:
             pass
         try:
-            import webui
-            webui.stop()
+            _fresh("webui").stop()
         except Exception:
             pass
 
@@ -632,7 +675,7 @@ class TaskPlugin(Star):
                 vurl = (self._cfg("vision_api_url") or "").strip()
                 vmodel = (self._cfg("vision_model") or "").strip()
                 if imgs and vkey and vurl and vmodel:
-                    import vision as vision_mod
+                    vision_mod = _fresh("vision")
                     descs = []
                     for u in imgs[:3]:
                         try:
@@ -945,7 +988,6 @@ class TaskPlugin(Star):
         if len(content) < 4:
             return ("content 过短, 不存储")
             return
-        import memory as memory_mod
         affect = memory_mod.estimate_affect(content)
         r = self.memory.upsert_similar(
             content, memory_type if memory_type in ("fact", "preference", "task_context") else "fact",

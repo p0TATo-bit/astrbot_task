@@ -2,7 +2,7 @@ name: astrbot_task
 display_name: 具有情感记忆的机器人管家
 desc: "能够管理日常活动、情绪陪伴和长期记忆的机器人管家插件"
 short_desc: "任务日程 / 长期记忆 / 情绪陪伴"
-version: v1.1.2
+version: v1.1.3
 author: p67at0
 repo: "https://github.com/p0TATo-bit/astrbot_task"
 tags: ["任务管理", "长期记忆", "情绪陪伴"]

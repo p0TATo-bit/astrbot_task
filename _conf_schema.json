@@ -87,7 +87,35 @@
         "description": "感兴趣的话题(逗号分隔)",
         "type": "string",
         "default": "科技趣闻, 有趣的新闻",
-        "hint": "在聊天里对她说「每天推点AI和考研资讯」也能改"
+        "hint": "在聊天里对她说「每天推点AI资讯」也能改"
+      }
+    }
+  },
+  "reply": {
+    "type": "object",
+    "description": "回复风格与分段发送",
+    "items": {
+      "reply_split_enabled": {
+        "description": "长回复分段发送(模拟真人连发多条)",
+        "type": "bool",
+        "default": true
+      },
+      "reply_max_len": {
+        "description": "分段阈值(字符)",
+        "type": "int",
+        "default": 160,
+        "slider": { "min": 60, "max": 500, "step": 20 }
+      },
+      "reply_delay_ms": {
+        "description": "分段间隔(毫秒)",
+        "type": "int",
+        "default": 1200,
+        "slider": { "min": 0, "max": 5000, "step": 100 }
+      },
+      "reply_style": {
+        "description": "回复风格提示(注入给她)",
+        "type": "string",
+        "default": "口语化、简洁、自然, 像真人发消息; 单次回复尽量短, 不要长篇大论, 不要列长清单, 不要复述工具的原始输出"
       }
     }
   },
@@ -99,7 +127,7 @@
         "description": "管理模型 Provider ID(留空=跟随聊天模型)",
         "type": "string",
         "default": "",
-        "hint": "记忆总结 / 提取 / 关键词精修 / 意图分析 / 情绪微调 / 推送口吻 / 计划生成 等内部任务统一用它, 建议填便宜快的小模型; 聊天回复不受影响。填法: 面板「服务提供商」页每个配置都有 ID, 抄过来填这里; 不确定就 QQ 发 /任务 模型, 她会列出全部可用 ID。留空完全可用, 内部任务会自动用当前聊天模型"
+        "hint": "记忆总结 / 提取 / 关键词精修 / 意图分析 / 情绪微调 / 推送口吻 / 计划生成 等内部任务统一用它, 建议填便宜快的小模型; 聊天回复不受影响。填法: 面板「服务提供商」页每个配置都有 ID, 抄过来填这里; 不确定就发 /任务 模型, 她会列出全部可用 ID。留空完全可用, 内部任务会自动用当前聊天模型"
       },
       "tool_voice_enabled": {
         "description": "工具结果用人格口吻播报",
@@ -144,10 +172,10 @@
     "description": "WebUI(浏览器管理界面 :6187)",
     "items": {
       "webui_host": {
-        "description": "监听地址(Docker 用 0.0.0.0)",
+        "description": "监听地址(默认 127.0.0.1, 仅本机可访问)",
         "type": "string",
-        "default": "0.0.0.0",
-        "hint": "Docker 部署必须 0.0.0.0 否则端口映射进不来; 本机裸跑想仅本机访问改 127.0.0.1"
+        "default": "127.0.0.1",
+        "hint": "安全提示: WebUI 无登录鉴权, 0.0.0.0 会把你的任务/记忆/对话暴露给同网络内任何人。Docker 部署且需要外部访问时, 请优先用 SSH 隧道或 Tailscale; 确有把握才改 0.0.0.0"
       },
       "webui_port": {
         "description": "监听端口(默认 6187)",

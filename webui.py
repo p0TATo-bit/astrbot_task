@@ -6,16 +6,24 @@ import json
 import sqlite3
 import threading
 import datetime
+import sys
+import importlib
 from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import tasks_core
-import memory as memory_mod
-import skills as skills_mod
-import builtins
-import sys
 
-from memory import MemoryStore
+def _fresh(name):
+    # 经 main 的统一清缓存后走托管包名导入(或独立运行回退裸名), 保证拿到磁盘最新代码
+    pkg = __package__ or ""
+    return importlib.import_module(f"{pkg}.{name}" if pkg else name)
+
+
+tasks_core = _fresh("tasks_core")
+memory_mod = _fresh("memory")
+skills_mod = _fresh("skills")
+import builtins
+
+MemoryStore = memory_mod.MemoryStore
 
 _state = {"db_path": None, "port": 6187, "memory": None}
 

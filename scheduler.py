@@ -5,14 +5,23 @@
 
 import os
 import re
+import sys
 import random
 import sqlite3
 import datetime
 import asyncio
+import importlib
 from astrbot.api import logger  # 官方要求: 使用 AstrBot 统一 logger
 
-import skills as skills_mod
-import tasks_core
+
+def _fresh(name):
+    # 经 main 的统一清缓存后走托管包名导入(或独立运行回退裸名), 保证拿到磁盘最新代码
+    pkg = __package__ or ""
+    return importlib.import_module(f"{pkg}.{name}" if pkg else name)
+
+
+skills_mod = _fresh("skills")
+tasks_core = _fresh("tasks_core")
 
 BACKUP_KEEP = 7
 LOG_RETENTION_DAYS = 90
@@ -137,7 +146,11 @@ class Scheduler:
             logger.error("[astrbot_task] 调度循环未启动(无事件循环)")
             return
         self.task = asyncio.create_task(self._loop())
-        self._boot_backup()
+        try:
+            self._boot_backup()
+        except Exception as e:
+            # 启动备份失败不能拖死调度器, 更不能炸掉插件加载
+            logger.error("[astrbot_task] 启动备份失败(不影响调度): %s", e)
 
     async def stop(self):
         if self.task:
