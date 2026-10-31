@@ -34,7 +34,7 @@ DB_PATH = os.path.join(_DATA_DIR, "data.db")
 # 兄弟模块必须经 _fresh 导入, 且 main 被导入时统一清一次缓存:
 # AstrBot 重装/重载只清理 data.plugins.<插件名>.* 的托管模块名, 裸名(import scheduler)
 # 的旧字节码会一直留在 sys.modules——曾把旧版坏代码喂给新装版本, 插件加载即崩。
-_SIBLING_MODULES = ("emotion", "memory", "scheduler", "skills", "tasks_core", "webui", "vision")
+_SIBLING_MODULES = ("emotion", "memory", "scheduler", "skills", "tasks_core", "webui", "vision", "selfchat")
 
 
 def _purge_siblings():
@@ -58,6 +58,12 @@ memory_mod = _fresh("memory")
 scheduler_mod = _fresh("scheduler")
 skills_mod = _fresh("skills")
 tasks_core = _fresh("tasks_core")
+try:
+    selfchat_mod = _fresh("selfchat")  # 手机聊天平台(需要 AstrBot 平台适配器 API)
+    selfchat_mod.DB_PATH = DB_PATH  # 历史随插件数据目录走(更新免疫)
+except Exception as _sc_err:
+    selfchat_mod = None
+    logger.warning("[astrbot_task] 自建手机聊天(selfchat)不可用: %s", _sc_err)
 
 WEEKDAY_CN = "日一二三四五六"
 
