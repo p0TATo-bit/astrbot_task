@@ -976,7 +976,7 @@ function page(p) {
 }
 document.querySelectorAll('.nav-item').forEach(n => n.onclick = () => page(n.dataset.p));
 window.addEventListener('hashchange', () => {
-  const p = location.hash.replace(/^#\/?/, '') || 'dash';
+  const p = location.hash.replace(/^#[/]?/, '') || 'dash';
   const on = document.querySelector('.nav-item.on');
   if (PAGES.includes(p) && (!on || on.dataset.p !== p)) page(p);
 });
@@ -1698,7 +1698,7 @@ async function loadUsage() {
     </table>` : '<div class="meta">还没有调用记录 — 聊几句或等一次定时推送后这里会出现数据</div>';
 }
 
-const _hashP = location.hash.replace(/^#\/?/, '') || '';
+const _hashP = location.hash.replace(/^#[/]?/, '') || '';
 page(PAGES.includes(_hashP) ? _hashP : 'dash');
 setTimeout(bindGraph, 300);
 </script>
@@ -1729,6 +1729,10 @@ def stop():
     if srv:
         try:
             srv.shutdown()
+        except Exception:
+            pass
+        try:
+            srv.server_close()  # 必须显式关闭监听套接字: 否则浏览器 keep-alive 线程抓着服务器对象不放, 端口一直被占, 更新后 WebUI 永远起不来
         except Exception:
             pass
         _set_server(None)
