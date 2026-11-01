@@ -654,7 +654,7 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
 .cal-pill .dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .cal-we { color:var(--danger); }
 #graph-wrap:fullscreen { background:var(--card); padding:14px; overflow:auto; }
-#graph-wrap:fullscreen #graph { height: calc(100vh - 120px); border-radius:0; }
+#graph-wrap:fullscreen #graph { height: calc(100vh - 120px) !important; border-radius:0; }
 @media (max-width:800px) { .u-stats { grid-template-columns:repeat(2,1fr); } }
 </style>
 </head>
@@ -1232,7 +1232,8 @@ function toggleGraphFullscreen() {
     (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
   }
 }
-document.addEventListener('fullscreenchange', () => { setTimeout(() => { try { drawGraph(); } catch (e) {} }, 60); });
+document.addEventListener('fullscreenchange', () => { setTimeout(() => { try { layoutGraph(); } catch (e) {} }, 80); });
+window.addEventListener('resize', () => { setTimeout(() => { try { if (document.getElementById('p-memories') && document.getElementById('p-memories').style.display !== 'none') layoutGraph(); } catch (e) {} }, 150); });
 async function loadGraph() {
   gData = await api('/api/memory/graph');
   const c = document.getElementById('graph');
@@ -1271,7 +1272,7 @@ function fitCanvas(w, h, pad) {
 }
 function layoutGraph() {
   const c = document.getElementById('graph');
-  const w = c.clientWidth || 800, h = 360;
+  const w = c.clientWidth || 800, h = c.clientHeight || 360;  // 全屏时跟随真实高度
   const n = gNodes.length;
   if (!n) return;
   if (gMode === 'force') {
@@ -1350,13 +1351,13 @@ const TYPE_C = { fact:'#5b8c8f', preference:'#d4a574', task_context:'#7ba89c', c
 function drawGraph() {
   const c = document.getElementById('graph');
   if (!c) return;
-  const dpr = window.devicePixelRatio || 1, w = c.clientWidth || 800, h = 360;
+  const dpr = window.devicePixelRatio || 1, w = c.clientWidth || 800, h = c.clientHeight || 360;
   c.width = w*dpr; c.height = h*dpr;
   const ctx = c.getContext('2d');
   ctx.setTransform(dpr,0,0,dpr,0,0);
   ctx.translate(gPanX, gPanY); ctx.scale(gZoom, gZoom);
   ctx.clearRect(-gPanX/gZoom, -gPanY/gZoom, w/gZoom, h/gZoom);
-  if (!gNodes.length) { ctx.fillStyle = '#7b9fa8'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('暂无记忆', w/2, 180); return; }
+  if (!gNodes.length) { ctx.fillStyle = '#7b9fa8'; ctx.font = '14px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('暂无记忆', w/2, h/2); return; }
   const wMax = Math.max(0.001, ...gEdges.map(e => e.w));
   const nb = gHl ? new Set(gEdges.filter(e => e.a===gHl || e.b===gHl).flatMap(e => [e.a, e.b])) : null;
   for (const e of gEdges) {
@@ -1397,7 +1398,7 @@ function bindGraph() {
   c.addEventListener('mousemove', ev => { if (!gDrag) return; const p = pos(ev);
     if (gDrag.pan) { gPanX = gDrag.ox + (p.x-gDrag.sx); gPanY = gDrag.oy + (p.y-gDrag.sy); gDrag.moved = true; drawGraph(); return; }
     const wx = (p.x-gPanX)/gZoom, wy = (p.y-gPanY)/gZoom;
-    gDrag.node.x = Math.max(26, Math.min(c.clientWidth-26, wx)); gDrag.node.y = Math.max(20, Math.min(340, wy)); gDrag.moved = true; drawGraph(); });
+    gDrag.node.x = Math.max(26, Math.min(c.clientWidth-26, wx)); gDrag.node.y = Math.max(20, Math.min(c.clientHeight-20, wy)); gDrag.moved = true; drawGraph(); });
   c.addEventListener('mouseup', () => { if (!gDrag) return;
     if (!gDrag.moved && gDrag.node) { gHl = gHl === gDrag.node.id ? null : gDrag.node.id; showNode(gHl ? gNodes.find(n => n.id === gHl) : null); }
     gDrag = null; drawGraph(); });
