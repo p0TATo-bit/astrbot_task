@@ -958,9 +958,11 @@ function toggleEv(id, date, isOcc, done) {
 }
 const loc = s => s ? new Date(String(s).replace(' ','T')).toLocaleString('zh-CN') : '';
 
+const PAGES = ['dash','calendar','tasks','memories','chats','emotion','docs','settings','usage'];
 function page(p) {
+  if (!PAGES.includes(p)) p = 'dash';
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('on', n.dataset.p === p));
-  for (const id of ['dash','calendar','tasks','memories','chats','emotion','docs','settings','usage']) document.getElementById('p-'+id).style.display = id === p ? '' : 'none';
+  for (const id of PAGES) document.getElementById('p-'+id).style.display = id === p ? '' : 'none';
   if (p === 'dash') loadDash();
   if (p === 'calendar') loadCalendar();
   if (p === 'tasks') loadTasks();
@@ -970,8 +972,14 @@ function page(p) {
   if (p === 'docs') loadDocs(1);
   if (p === 'settings') loadSettings();
   if (p === 'usage') loadUsage();
+  try { history.replaceState(null, '', '#/' + p); } catch (e) {}  // 刷新/分享后停留在当前页
 }
 document.querySelectorAll('.nav-item').forEach(n => n.onclick = () => page(n.dataset.p));
+window.addEventListener('hashchange', () => {
+  const p = location.hash.replace(/^#\/?/, '') || 'dash';
+  const on = document.querySelector('.nav-item.on');
+  if (PAGES.includes(p) && (!on || on.dataset.p !== p)) page(p);
+});
 
 const api = async (p, opts) => (await fetch(p, opts)).json();
 function openModal(id) { document.getElementById(id).classList.add('on'); }
@@ -1690,7 +1698,8 @@ async function loadUsage() {
     </table>` : '<div class="meta">还没有调用记录 — 聊几句或等一次定时推送后这里会出现数据</div>';
 }
 
-page('dash');
+const _hashP = location.hash.replace(/^#\/?/, '') || '';
+page(PAGES.includes(_hashP) ? _hashP : 'dash');
 setTimeout(bindGraph, 300);
 </script>
 </body>
