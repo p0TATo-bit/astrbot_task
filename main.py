@@ -1254,7 +1254,8 @@ class TaskPlugin(Star):
         url = url.strip()
         if not re.match(r"^https?://", url):
             return ("url 必须是 http/https 完整网址")
-        try:
+
+        def _fetch() -> str:
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
                 "Accept-Language": "zh-CN,zh;q=0.9"})
@@ -1264,7 +1265,10 @@ class TaskPlugin(Star):
             text = re.sub(r"<[^>]+>", "", text)
             for ent, ch in (("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&quot;", '"'), ("&#39;", "'")):
                 text = text.replace(ent, ch)
-            text = "\n".join(s.strip() for s in text.split("\n") if s.strip())[:4000]
+            return "\n".join(s.strip() for s in text.split("\n") if s.strip())[:4000]
+
+        try:
+            text = await asyncio.to_thread(_fetch)
             if not text:
                 return ("(页面没有可读文本)")
             return (text + ("\n(内容过长已截断)" if len(text) >= 4000 else ""))
