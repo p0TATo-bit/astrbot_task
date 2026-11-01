@@ -78,13 +78,15 @@ flowchart TB
         DB[("data.db 插件数据目录<br>tasks / memories / emotion<br>chats / notes / quiz_bank<br>selfchat_msg / 备份")]
         KBD[("AstrBot 知识库<br>BM25+向量 → 可选 Rerank")]
     end
-    H1 -.-> DB
-    T1 -.-> DB
-    T3 -.-> DB
-    SC -.-> DB
-    SCHED -.-> DB
-    KB -.-> KBD
-    T11 -.-> KBD
+    H1 <-->|"写记录 / 读情绪状态"| DB
+    T1 <-->|"任务增删改查"| DB
+    T3 <-->|"笔记写读"| DB
+    SC <-->|"历史读写"| DB
+    SCHED <-->|"读写任务与日志"| DB
+    DB -->|"记忆召回喂上下文"| MEM
+    PANEL -->|"展示查询"| DB
+    T11 -->|"写入文档"| KBD
+    KBD -->|"检索片段注入"| KB
 
     classDef chan fill:#e8eef7,stroke:#5E82B5,stroke-width:2px
     classDef pipe fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
