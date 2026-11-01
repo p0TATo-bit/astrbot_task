@@ -932,7 +932,7 @@ const loc = s => s ? new Date(String(s).replace(' ','T')).toLocaleString('zh-CN'
 
 function page(p) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.toggle('on', n.dataset.p === p));
-  for (const id of ['dash','calendar','tasks','memories','chats','emotion','docs','usage']) document.getElementById('p-'+id).style.display = id === p ? '' : 'none';
+  for (const id of ['dash','calendar','tasks','memories','chats','emotion','docs','settings','usage']) document.getElementById('p-'+id).style.display = id === p ? '' : 'none';
   if (p === 'dash') loadDash();
   if (p === 'calendar') loadCalendar();
   if (p === 'tasks') loadTasks();
