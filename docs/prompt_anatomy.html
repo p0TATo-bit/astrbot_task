@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>发给大模型的请求由哪几部分组成 · astrbot_task</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --background: #f6f5f2; --foreground: #2c3e50;
+  --card: #ffffff; --border: #e2ded6;
+  --muted: #efece6; --muted-foreground: #6b7a80;
+  --primary: #5b8c8f; --primary-foreground: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #17191b; --foreground: #dfe5e6;
+    --card: #1f2224; --border: #33383b;
+    --muted: #24282a; --muted-foreground: #93a1a6;
+    --primary: #7fb3b6; --primary-foreground: #10201f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--foreground);
+  font-family: -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px; line-height: 1.55; padding: 28px 18px 60px; }
+main { max-width: 860px; margin: 0 auto; }
+h2 { font-size: 18px; } h3 { font-size: 14px; }
+.text-small { font-size: 12px; } .text-muted { color: var(--muted-foreground); }
+.viz-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+.viz-badge { display: inline-block; border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 10px; font-size: 12px; background: var(--muted); }
+button { font: inherit; }
+.btn { border: 1px solid var(--border); border-radius: 8px; background: var(--card);
+  color: var(--foreground); padding: 5px 12px; cursor: pointer; }
+.btn:hover { border-color: var(--primary); }
+pre { background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px; overflow-x: auto; font-size: 12.5px; line-height: 1.6; }
+</style>
+</head>
+<body>
+<main>
+<div id="prompt-anatomy">
+  <h2>发给大模型的请求,由哪几部分组成</h2>
+  <div class="viz-row">
+    <span class="text-muted text-small">点击任意一层查看来源与内容示例 · 层序为模型读取的逻辑顺序 · 粉色五层是插件每轮临时注入的部分</span>
+  </div>
+
+  <div id="pa-frame-group" style="margin-top:10px;">
+    <div class="text-small text-muted" style="margin:2px 0 6px;">AstrBot 框架层(插件不改动)</div>
+    <div id="pa-stack-frame"></div>
+  </div>
+
+  <div id="pa-inject-group" style="margin-top:14px; padding:12px; border:1px solid var(--border); border-radius:12px; background:var(--muted);">
+    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:6px;">
+      <span style="font-weight:500;">插件每轮临时注入 · mark_as_temp</span>
+      <span class="text-small text-muted">不进对话历史 · 不破坏 prompt 缓存 · 附在用户消息之后</span>
+    </div>
+    <div id="pa-stack-inject"></div>
+  </div>
+
+  <div style="margin-top:14px;">
+    <div id="pa-stack-tail"></div>
+  </div>
+
+  <div class="card" id="pa-detail" aria-live="polite" style="margin-top:14px;"></div>
+
+  <div class="viz-row" style="margin-top:14px;">
+    <button type="button" class="btn" id="pa-sample-btn" aria-expanded="false">查看拼装示例</button>
+  </div>
+  <pre id="pa-sample" hidden style="margin-top:8px;"><code id="pa-sample-code"></code></pre>
+
+  <h3 style="margin-top:18px;">她回完话之后</h3>
+  <div class="viz-row" style="gap:6px;">
+    <span class="viz-badge">LLM 响应</span><span>→</span>
+    <span class="viz-badge">on_llm_response 历史配对</span><span>→</span>
+    <span class="viz-badge">分段(AstrBot 正则+随机间隔)</span><span>→</span>
+    <span class="viz-badge">双通道发送 QQ+手机</span>
+  </div>
+  <div class="text-small text-muted" style="margin-top:6px;">后台同时:每 20 轮周期总结(记忆回灌)· 每 10 轮情绪校准 · 意图分析(管理模型,约 +2~5 秒)· 每分钟调度器(提醒/主动关心/内容推送,双通道)。</div>
+
+  <style>
+    #prompt-anatomy .pa-layer {
+      width: 100%; text-align: left; border: 1px solid var(--border);
+      border-radius: 10px; background: var(--card); color: var(--foreground);
+      padding: 9px 12px; margin: 5px 0; display: flex; align-items: center; gap: 10px;
+    }
+    #prompt-anatomy .pa-layer .pa-ord {
+      flex-shrink: 0; width: 24px; height: 24px; border-radius: 50%;
+      display: inline-flex; align-items: center; justify-content: center;
+      background: var(--muted); color: var(--muted-foreground); font-size: 12px;
+    }
+    #prompt-anatomy .pa-layer .pa-name { font-weight: 500; }
+    #prompt-anatomy .pa-layer .pa-src { margin-left: auto; }
+    #prompt-anatomy .pa-inject .pa-ord { background: var(--primary); color: var(--primary-foreground); }
+    #prompt-anatomy .pa-layer[aria-pressed="true"] { border-color: var(--primary); }
+    #prompt-anatomy .pa-inject[aria-pressed="true"] { background: var(--muted); }
+  </style>
+  <script>
+  (function () {
+    const root = document.getElementById('prompt-anatomy');
+    const LAYERS = [
+      { n: 1, g: 'frame', name: 'System Prompt · 人格', src: 'AstrBot 面板', ex: '「你是希尔薇……」人设全文', cfg: '面板「人格管理」配置;插件从不修改它——保护 provider 的 prompt 缓存。' },
+      { n: 2, g: 'frame', name: '对话历史 · 最近若干轮', src: 'AstrBot 会话管理', ex: 'user / assistant 交替的近期消息', cfg: 'AstrBot 自动维护。' },
+      { n: 3, g: 'frame', name: '工具定义 · 函数调用说明书', src: '插件注册的 29 个工具 + astr_kb_search', ex: '每个工具的名称/参数/说明(JSON Schema),模型据此决定何时调用', cfg: '插件代码 @filter.llm_tool 注册;知识库 Agentic 开关控制 astr_kb_search。' },
+      { n: 4, g: 'frame', name: '知识库检索段落', src: 'AstrBot 知识库(pota 等)', ex: 'BM25+向量融合检索出的文本块,最多 5 条', cfg: '配置页「知识库」组;Agentic 模式下由她自己决定何时查。' },
+      { n: 5, g: 'inject', name: '情绪上下文', src: '插件 EmotionEngine', ex: '「你现在有点小疲惫,对主人的依恋……」', cfg: '每轮规则微调 ±0.08,每 10 轮 AI 校准 ±0.15。' },
+      { n: 6, g: 'inject', name: '相关记忆 · 两阶段召回', src: '插件 MemoryStore', ex: '1.[事实] 主人正在备考考研4… 2.[偏好] 主人喜欢无糖冰美式…', cfg: '记忆来自每 20 轮总结与「记住X」;45 天半衰期衰减;满 5 次被想起晋升金环。' },
+      { n: 7, g: 'inject', name: '人格提醒', src: '插件 persona_reminder', ex: '「无论回复多短,始终保持你当前人格的身份、说话口吻……」', cfg: 'WebUI 设置页;留空=内置提醒,填「关」=不注入。' },
+      { n: 8, g: 'inject', name: '回复风格', src: '插件 reply_style', ex: '「每次回复至多三句话;简单的回答尽可能保持在 1~2 句……」', cfg: 'WebUI 设置页大文本框;旧默认值自动升级 v2。' },
+      { n: 9, g: 'inject', name: '当前时间', src: '插件 now_str()', ex: '「2026-11-01 03:52 星期日 —— 涉及今天/明天/几点以此为准」', cfg: '每轮实时生成,防日期幻觉。' },
+      { n: 10, g: 'tail', name: '用户当前消息', src: '主人的这句话', ex: '「帮我看看明天有什么安排」', cfg: '临时注入的五层就附在这条消息之后。' }
+    ];
+    const SAMPLE = [
+      '[system] 你是希尔薇……(面板人格全文)',
+      '[历史] user: 今天好累 → assistant: 辛苦啦……(最近若干轮)',
+      '[本轮 user 消息] 主人帮我看看明天有什么安排',
+      '[临时注入 · mark_as_temp]',
+      '  【情绪上下文】你现在有点小疲惫,对主人的依恋……',
+      '  【相关记忆】1.[事实] 主人周一有组会…… 2.[偏好] 主人喜欢无糖冰美式……',
+      '  【人格提醒】无论回复多短,始终保持你当前人格的身份、说话口吻……',
+      '  【回复风格】每次回复至多三句话;简单的回答尽可能保持在 1~2 句……',
+      '  【当前时间】2026-11-01 03:52 星期日……',
+      '[工具定义] 29 个工具的 JSON Schema……(模型可自主调用)'
+    ].join('\n');
+    function layerBtn(d) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'pa-layer' + (d.g === 'inject' ? ' pa-inject' : '');
+      b.setAttribute('aria-pressed', 'false');
+      b.innerHTML = '<span class="pa-ord">' + d.n + '</span>' +
+        '<span class="pa-name">' + d.name + '</span>' +
+        '<span class="pa-src text-small text-muted">' + d.src + '</span>';
+      b.addEventListener('click', () => {
+        root.querySelectorAll('.pa-layer').forEach(x => x.setAttribute('aria-pressed', 'false'));
+        b.setAttribute('aria-pressed', 'true');
+        root.querySelector('#pa-detail').innerHTML =
+          '<b>' + d.name + '</b><br><span class="text-small">来源:' + d.src +
+          '<br>示例:' + d.ex + '<br>配置/机制:' + d.cfg + '</span>';
+      });
+      return b;
+    }
+    LAYERS.forEach(d => {
+      const host = root.querySelector(d.g === 'inject' ? '#pa-stack-inject' : (d.g === 'tail' ? '#pa-stack-tail' : '#pa-stack-frame'));
+      host.appendChild(layerBtn(d));
+    });
+    root.querySelector('#pa-detail').innerHTML =
+      '<b>提示</b><br><span class="text-small">点上面任意一层,这里会显示它的来源、内容示例和配置位置。</span>';
+    const btn = root.querySelector('#pa-sample-btn');
+    const pre = root.querySelector('#pa-sample');
+    btn.addEventListener('click', () => {
+      const show = pre.hidden;
+      pre.hidden = !show;
+      btn.setAttribute('aria-expanded', String(show));
+      btn.textContent = show ? '收起拼装示例' : '查看拼装示例';
+      root.querySelector('#pa-sample-code').textContent = SAMPLE;
+    });
+  })();
+  </script>
+</div>
+
+</main>
+</body>
+</html>
