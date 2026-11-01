@@ -194,3 +194,67 @@ def web_search(query, limit=6):
     if not out:
         raise ValueError("搜索没有返回结果")
     return out
+
+
+def search_papers(query, source="arxiv", limit=5):
+    """检索学术论文, 返回 [{title, authors, year, venue, abstract, link}](阻塞网络 IO, 调用方放线程)
+    arxiv: 计算机/物理/数学预印本(export.arxiv.org); openalex: 全学科期刊(api.openalex.org)"""
+    import json as _json
+    import urllib.parse
+    import urllib.request
+    import xml.etree.ElementTree as ET
+    query = str(query or "").strip()
+    limit = max(1, min(10, int(limit or 5)))
+    if not query:
+        raise ValueError("检索词不能为空")
+    src = (source or "arxiv").lower()
+
+    def _get(url):
+        req = urllib.request.Request(url, headers={"User-Agent": "astrbot_task/1.0 (paper search)"})
+        return urllib.request.urlopen(req, timeout=25).read()
+
+    if src == "openalex":
+        u = ("https://api.openalex.org/works?search=" + urllib.parse.quote(query)
+             + f"&per-page={limit}&select=display_name,authorships,publication_year,primary_location,doi,abstract_inverted_index")
+        data = _json.loads(_get(u).decode("utf-8", "ignore"))
+        out = []
+        for w in data.get("results", []):
+            authors = ", ".join((a.get("author") or {}).get("display_name", "")
+                                for a in (w.get("authorships") or [])[:4])
+            inv = w.get("abstract_inverted_index") or {}
+            pos = {}
+            for word, idxs in inv.items():
+                for i in idxs:
+                    pos[i] = word
+            abstract = " ".join(pos[i] for i in sorted(pos))[:400] if pos else ""
+            loc = (w.get("primary_location") or {}).get("source") or {}
+            out.append({"title": (w.get("display_name") or "")[:120], "authors": authors,
+                        "year": w.get("publication_year") or "",
+                        "venue": (loc.get("display_name") or "")[:60],
+                        "abstract": abstract, "link": w.get("doi") or ""})
+        if not out:
+            raise ValueError("没有检索到结果")
+        return out
+
+    u = ("https://export.arxiv.org/api/query?search_query=all:" + urllib.parse.quote(query)
+         + f"&start=0&max_results={limit}&sortBy=relevance")
+    ns = {"a": "http://www.w3.org/2005/Atom"}
+    root = ET.fromstring(_get(u).decode("utf-8", "ignore"))
+    out = []
+    for e in root.findall("a:entry", ns):
+        title = re.sub(r"\s+", " ", (e.findtext("a:title", "", ns) or "")).strip()
+        abstract = re.sub(r"\s+", " ", (e.findtext("a:summary", "", ns) or "")).strip()[:400]
+        authors = ", ".join((a.findtext("a:name", "", ns) or "") for a in e.findall("a:author", ns)[:4])
+        link = ""
+        for l in e.findall("a:link", ns):
+            if l.get("title") == "pdf":
+                link = l.get("href") or ""
+                break
+        if not link:
+            link = (e.findtext("a:id", "", ns) or "")
+        out.append({"title": title[:120], "authors": authors,
+                    "year": (e.findtext("a:published", "", ns) or "")[:4],
+                    "venue": "arXiv", "abstract": abstract, "link": link})
+    if not out:
+        raise ValueError("没有检索到结果")
+    return out

@@ -1150,6 +1150,27 @@ class TaskPlugin(Star):
         lines = [f"{i+1}. {r['title']}\n   {r['url']}\n   {r['snippet']}" for i, r in enumerate(results)]
         return ("\n".join(lines) + "\n(需要某条详情时用 open_url 打开链接)")
 
+    @filter.llm_tool(name="search_papers")
+    async def tool_search_papers(self, event: AstrMessageEvent, query: str, source: str = "arxiv", limit: int = 5):
+        """检索学术论文: 返回标题/作者/年份/期刊/摘要/链接。查文献、了解研究进展、找参考资料时用。
+        覆盖 arXiv(计算机/物理/数学预印本)与 OpenAlex(全学科期刊); 知网/万方无公开接口检索不到,
+        全文需学校订阅——拿到全文可粘贴到 WebUI 文档页后用 read_note 读给我。
+
+        Args:
+            query(string): 检索词(英文效果最好, 专业术语用英文)
+            source(string): "arxiv"(默认) 或 "openalex"
+            limit(number): 条数 1-10, 默认 5
+        """
+        try:
+            rows = await asyncio.to_thread(skills_mod.search_papers, query, source, limit)
+        except Exception as e:
+            return (f"检索失败: {e}")
+        lines = [f"{i}. {r['title']}({r.get('year') or 'n/a'}, {r.get('venue') or ''})\n"
+                 f"   作者: {r.get('authors') or '不详'}\n   链接: {r.get('link') or '(无)'}\n"
+                 f"   摘要: {r.get('abstract') or '(无)'}" for i, r in enumerate(rows, 1)]
+        return ("\n\n".join(lines)
+                + "\n(用你的口吻向主人介绍结果; 摘要仅供你参考, 不要整段复述。主人想要全文时, 提醒 PDF 链接可直接下载)")
+
     @filter.llm_tool(name="open_url")
     async def tool_open_url(self, event: AstrMessageEvent, url: str):
         """打开一个网页并读取正文文字(配合 web_search 的链接使用)。
