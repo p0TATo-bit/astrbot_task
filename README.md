@@ -51,9 +51,9 @@ LLM 对话本体由 AstrBot 驱动:请先在 AstrBot 配置好 LLM 提供商(如
 - `/任务 清空` — 清空全部任务与打卡(可 /任务 撤销 找回)
 - `/任务 帮助`
 
-## LLM 工具(自然语言自动调用, 21 个)
+## LLM 工具(自然语言自动调用, 22 个)
 
-create_task(循环/循环截止/end_time/分类, 同名去重+时段冲突检测) / create_tasks(课程表批量导入, 最多40) / update_task(修改任务, 冲突检测) / list_tasks / complete_task(循环打卡当天, 整体完成需确认) / delete_task(二次确认) / move_occurrence(单次改期, 只影响那一天) / undo_task_change(撤销最近任务变更, 快照回退) / store_memory / search_memory / current_time / web_search / open_url / set_reminder / take_test(替主人做测试: 检索记忆作依据, 逐题作答+计分) / browser_task(操作网页: 无头浏览器自动点击/填写/提交并返回结果, 可选依赖 playwright)
+create_task(循环/循环截止/end_time/分类, 同名去重+时段冲突检测) / create_tasks(课程表批量导入, 最多40) / update_task(修改任务, 冲突检测) / list_tasks / complete_task(循环打卡当天, 整体完成需确认) / delete_task(二次确认) / move_occurrence(单次改期, 只影响那一天) / undo_task_change(撤销最近任务变更, 快照回退) / store_memory / search_memory / current_time / web_search / open_url / set_reminder / take_test(替主人做测试: 检索记忆作依据, 逐题作答+计分) / browser_task(操作网页: 无头浏览器自动点击/填写/提交并返回结果, 可选依赖 playwright) / browser_login(扫码登录: 二维码发给主人, 登录态持久化免登)
 
 插件内部 LLM 任务(总结/提取/意图/口吻/计划)不走以上工具, 统一走管理模型配置。
 

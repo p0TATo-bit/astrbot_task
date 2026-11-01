@@ -7,6 +7,7 @@
 # 不占 AstrBot 对话工具轮次); 单例浏览器常驻复用, 单主人串行使用。
 
 import json
+import os
 import queue
 import re
 import threading
@@ -19,6 +20,9 @@ try:
 except Exception:
     sync_playwright = None
     PLAYWRIGHT_OK = False
+
+STATE_FILE = ""  # main.py 注入: 插件数据目录/browser_state.json(Cookies 持久化, 登录一次长期免登)
+DATA_DIR = ""    # main.py 注入: 插件数据目录(二维码截图等临时文件)
 
 ENABLE_HINT = ("(网页操作未启用: 需要无头浏览器。请在 AstrBot 容器里执行两行命令后重启容器:\n"
                "pip install playwright\n"
@@ -114,10 +118,113 @@ def _ensure_page(st) -> object:
             st["pw"].stop()
             st["pw"] = None
             raise RuntimeError(f"浏览器启动失败(容器里缺 chromium? 执行 playwright install chromium): {e}")
-        st["page"] = st["browser"].new_page(user_agent=(
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"))
+        ctx = st["browser"].new_context(
+            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0.0.0 Safari/537.36"),
+            **({"storage_state": STATE_FILE} if STATE_FILE and os.path.exists(STATE_FILE) else {}))
+        st["context"] = ctx
+        st["page"] = ctx.new_page()
     return st["page"]
+
+
+def _save_state_locked(st):
+    """把当前登录态(Cookies/localStorage)存盘, 下次启动自动带上"""
+    ctx = st.get("context")
+    if ctx and STATE_FILE:
+        try:
+            os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
+            ctx.storage_state(path=STATE_FILE)
+            return True
+        except Exception as e:
+            logger.warning("[webops] 登录态保存失败: %s", e)
+    return False
+
+
+def _op_save_state() -> bool:
+    bt = _bt()
+    return bt.run(lambda: _save_state_locked(bt._st))
+
+
+# ---- 扫码登录 ----
+
+_QR_FIND_JS = """(() => {
+  let best = null;
+  for (const el of document.querySelectorAll('img, canvas')) {
+    const r = el.getBoundingClientRect();
+    const s = Math.min(r.width, r.height);
+    if (s < 110) continue;
+    const hint = String(el.className + ' ' + el.id + ' ' + (el.src || '')).toLowerCase();
+    const score = (/qr|qrcode|code/.test(hint) ? 1000 : 0) + s;
+    if (!best || score > best.score) best = {el, score};
+  }
+  if (best) { best.el.setAttribute('data-qr', '1'); return true; }
+  return false;
+})()"""
+
+
+def _op_find_qr() -> str | None:
+    """找页面上最大的二维码元素, 截图存盘并返回路径; 没有返回 None"""
+    bt = _bt()
+    def job():
+        page = _ensure_page(bt._st)
+        if not page.evaluate(_QR_FIND_JS):
+            return None
+        path = os.path.join(DATA_DIR or ".", "qr_latest.png")
+        try:
+            page.locator('[data-qr="1"]').first.screenshot(path=path, timeout=8000)
+        finally:
+            page.evaluate("() => { const e = document.querySelector('[data-qr]'); if (e) e.removeAttribute('data-qr'); }")
+        return path if os.path.exists(path) else None
+    try:
+        return bt.run(job)
+    except Exception as e:
+        logger.warning("[webops] 二维码截图失败: %s", e)
+        return None
+
+
+def login_judge_prompt(snap_fmt: str) -> str:
+    return ("用户正在网页上扫码登录。下面是当前页面状态, 判断登录是否已经成功:\n" + snap_fmt +
+            "\n\n只输出一个 JSON 对象: {\"login\": true 或 false, \"note\": \"一句中文说明\"}\n"
+            "已登录的标志: 页面出现用户昵称/头像/个人中心/退出按钮, 或已离开登录页; 出现二维码或登录表单=未登录。")
+
+
+async def run_login(url: str, llm_call, notify_qr, wait_s: int = 150):
+    """扫码登录流程: 打开登录页 → 二维码截图发给主人 → 轮询判定登录成功 → 存登录态。
+    notify_qr: async (图片路径) -> None, 由宿主发到主人会话。"""
+    import asyncio
+    import time as _time
+    try:
+        snap = await asyncio.to_thread(_op_goto, url)
+    except Exception as e:
+        return f"(打开登录页失败: {e})"
+    sent = False
+    deadline = _time.time() + wait_s
+    while _time.time() < deadline:
+        qr_path = await asyncio.to_thread(_op_find_qr)
+        if qr_path and not sent:
+            try:
+                await notify_qr(qr_path)
+                sent = True
+                logger.info("[webops] 二维码已发送给主人, 等待扫码")
+            except Exception as e:
+                logger.warning("[webops] 二维码发送失败: %s", e)
+        try:
+            raw = await llm_call(login_judge_prompt(_fmt_snapshot(snap)),
+                                 system="你是登录状态判定器, 只输出 JSON。", kind="webops")
+        except Exception as e:
+            return f"(判定调用失败: {e})"
+        d = parse_decision(raw)
+        if d and d.get("login"):
+            saved = await asyncio.to_thread(_op_save_state)
+            return (f"登录成功({d.get('note', '')})。登录态已{'保存' if saved else '暂存'}, "
+                    f"以后操作这个网站会自动带上, 不用再登。")
+        await asyncio.sleep(5)
+        try:
+            snap = await asyncio.to_thread(_op_snapshot)
+        except Exception as e:
+            return f"(页面快照失败: {e})"
+    return ("(等待扫码超时(2.5分钟)。备选: 把账号密码写进 browser_task 的任务描述里让它代填, "
+            "如「用账号 abc 密码 123 登录并做完测试」; 或换无需登录的站点。)")
 
 
 def stop():
@@ -268,6 +375,7 @@ async def run_task(url: str, goal: str, llm_call, max_steps: int = _MAX_STEPS):
         if not act:
             continue
         if (act.get("type") or "").lower() == "done":
+            await asyncio.to_thread(_op_save_state)  # 顺手刷新登录态/Cookies
             return ((act.get("result") or "(任务完成, 但代理没给结果描述)")
                     + f"\n(共 {step} 步, 结束于 {snap.get('url', '')})")
         try:

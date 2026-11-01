@@ -65,6 +65,8 @@ except Exception as _sc_err:
     logger.warning("[astrbot_task] 自建手机聊天(selfchat)不可用: %s", _sc_err)
 try:
     webops_mod = _fresh("webops")  # 网页操作(可选: 需要 playwright + chromium)
+    webops_mod.STATE_FILE = os.path.join(_DATA_DIR, "browser_state.json")
+    webops_mod.DATA_DIR = _DATA_DIR
 except Exception as _wo_err:
     webops_mod = None
     logger.info("[astrbot_task] 网页操作(webops)未启用: %s", _wo_err)
@@ -1108,6 +1110,31 @@ class TaskPlugin(Star):
         if not goal:
             return ("goal 必填: 描述要完成的任务")
         return await webops_mod.run_task(url.strip(), goal, self._llm_call)
+
+    @filter.llm_tool(name="browser_login")
+    async def tool_browser_login(self, event: AstrMessageEvent, url: str):
+        """扫码登录网站: 打开登录页, 把二维码截图发给主人扫码, 登录成功后保存登录态(以后该站免登录)。
+        账号密码登录的站不用本工具, 直接在 browser_task 的任务描述里写账号密码即可。
+
+        Args:
+            url(string): 登录页地址(http/https 开头)
+        """
+        if webops_mod is None or not webops_mod.PLAYWRIGHT_OK:
+            return webops_mod.ENABLE_HINT if webops_mod else "(网页操作模块未加载)"
+        url = (url or "").strip()
+        if not re.match(r"^https?://", url):
+            return ("url 必须是 http/https 完整网址")
+        umo = event.unified_msg_origin
+
+        async def notify_qr(path: str):
+            try:
+                from astrbot.core.message.components import Image as CoreImage
+                from astrbot.core.message.message_event_result import MessageChain as CoreChain
+                await self.context.send_message(umo, CoreChain(chain=[CoreImage.fromFileSystem(path)]))
+            except Exception as e:
+                logger.warning("[astrbot_task] 二维码图片发送失败: %s", e)
+
+        return await webops_mod.run_login(url.strip(), self._llm_call, notify_qr)
 
     @filter.llm_tool(name="web_search")
     async def tool_web_search(self, event: AstrMessageEvent, query: str):
