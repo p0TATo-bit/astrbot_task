@@ -1585,6 +1585,8 @@ const SETTING_FIELDS = [
   { g: 'reply', k: 'reply_delay_ms', label: '分段间隔(毫秒)', type: 'num' },
   { g: 'reply', k: 'persona_reminder', label: '每轮人格提醒(留空=内置, 填关=不注入)', type: 'area' },
   { g: 'reply', k: 'reply_style', label: '回复风格提示(留空=内置默认)', type: 'area' },
+  { g: 'reply', k: 'auto_doc_enabled', label: '长回复自动转文档', type: 'bool' },
+  { g: 'reply', k: 'auto_doc_len', label: '转文档字数阈值', type: 'num' },
   { g: 'admin', k: 'auto_extract_enabled', label: '每轮自动提取记忆(默认关)', type: 'bool' },
   { g: 'admin', k: 'kb_write_name', label: '知识库写入目标(留空=禁用)', type: 'text' },
   { g: 'admin', k: 'tool_voice_enabled', label: '工具结果口吻播报', type: 'bool' },

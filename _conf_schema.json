@@ -128,6 +128,19 @@
         "type": "string",
         "default": "",
         "hint": "每次对话都会额外提醒模型保持人格设定, 防止长对话或工具调用后出戏。建议填成你人格的一句话浓缩版(身份+口吻+称呼), 比泛泛提醒更有效"
+      },
+      "auto_doc_enabled": {
+        "description": "长回复自动转文档",
+        "type": "bool",
+        "default": true,
+        "hint": "回复达到字数阈值时不发长消息, 自动整理成 markdown 文档发给主人(同时存入笔记), 失败自动回退普通消息; 日常短消息不受影响"
+      },
+      "auto_doc_len": {
+        "description": "自动转文档的字数阈值",
+        "type": "int",
+        "default": 300,
+        "slider": { "min": 100, "max": 1000, "step": 50 },
+        "hint": "回复达到这个字数就转文档; 日常短消息不受影响"
       }
     }
   },

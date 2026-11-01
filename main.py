@@ -638,8 +638,19 @@ class TaskPlugin(Star):
                         c.execute("INSERT INTO chats (umo, role, text) VALUES (?,?,?)", (umo, "ai", str(reply)[:2000]))
                 except Exception as e:
                     logger.error("[astrbot_task] 对话记录失败: %s", e)
+                # 长回复自动转文档: 日常短消息照常, 达到阈值的长文本整理成 markdown 文件发(失败回退消息)
+                reply_text = str(reply or "")
+                doc_sent = False
+                doc_len = int(self._cfg("auto_doc_len", 300) or 300)
+                if self._cfg("auto_doc_enabled", True) and len(reply_text) >= doc_len:
+                    try:
+                        await self._send_long_doc(umo, reply_text)
+                        doc_sent = True
+                        resp.completion_text = "内容有点长, 我整理成文档发给你了~"
+                    except Exception as e:
+                        logger.error("[astrbot_task] 长回复转文档失败, 回退消息: %s", e)
                 # 分段发送: 长回复按句子切成多条消息, 模拟真人连发(失败回退整条)
-                if self._cfg("reply_split_enabled", True):
+                if not doc_sent and self._cfg("reply_split_enabled", True):
                     try:
                         segs = self._split_reply(str(reply), int(self._cfg("reply_max_len", 160)))
                         if len(segs) > 1:
@@ -659,6 +670,23 @@ class TaskPlugin(Star):
                         self._history_text(umo)))
         except Exception as e:
             logger.error("[astrbot_task] 回复后处理失败: %s", e)
+
+    async def _send_long_doc(self, umo: str, reply: str) -> bool:
+        """长回复自动转文档: 写入笔记存档 + 以文件消息发给主人; 成功返回 True"""
+        from astrbot.api.message_components import File
+        from astrbot.api.event import MessageChain
+        first_line = ""
+        for line in str(reply).splitlines():
+            line = line.strip().lstrip("#*- ·、")
+            if line:
+                first_line = line
+                break
+        title = (first_line[:16] or "整理稿") + " " + datetime.datetime.now().strftime("%m%d-%H%M")
+        path, _ = skills_mod.write_note(self.db_path, title, str(reply))
+        fname = skills_mod.safe_title(title) + ".md"
+        await self.context.send_message(umo, MessageChain(chain=[File(name=fname, file=path)]))
+        logger.info(f"[astrbot_task] 长回复已转文档发送: {fname}({len(reply)}字)")
+        return True
 
     def _split_reply(self, text: str, max_len: int):
         """按句子边界把长回复切成多段(最多 4 段); 切不动就原样单段"""

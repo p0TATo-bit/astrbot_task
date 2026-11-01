@@ -14,7 +14,10 @@ sys.modules["astrbot.api.star"].Context = object
 sys.modules["astrbot.api.star"].Star = object
 sys.modules["astrbot.api.star"].register = lambda *a, **k: (lambda cls: cls)
 sys.modules["astrbot.api.event"].AstrMessageEvent = object
-sys.modules["astrbot.api.event"].MessageChain = object
+class _MessageChain:
+    def __init__(self, chain=None): self.chain = chain or []
+    def message(self, text): self.chain.append(text); return self
+sys.modules["astrbot.api.event"].MessageChain = _MessageChain
 class _FileComp:
     def __init__(self, name="", file=""): self.name, self.file = name, file
 sys.modules["astrbot.api.message_components"] = types.ModuleType("astrbot.api.message_components")
@@ -173,6 +176,15 @@ must("kb_write 同名覆盖+batch10", "已写入" in r5 and len(ups) == 1
 must("kb_write 内容太短", "太短" in asyncio.run(inst2.tool_kb_write(None, "t2", "短")))
 inst2._config = {}
 must("kb_write 未配置禁用", "未配置" in asyncio.run(inst2.tool_kb_write(None, "t3", "这是一段足够长的测试内容。")))
+
+# ---- 2d. 长回复自动转文档 ----
+sent = []
+async def fake_send(umo, chain): sent.append(chain)
+inst2.context.send_message = fake_send
+inst2.db_path = tmpdb
+long_reply = "这是一份很长的整理内容, 需要转成文档发给主人。\n" * 30
+doc_ok = asyncio.run(inst2._send_long_doc("u1", long_reply))
+must("长回复转文档: 写笔记+发文件", doc_ok and len(sent) == 1 and sent[0].chain)
 
 # ================= 3. 配置: 迁移与兼容读取 =================
 print("[3] config 迁移与 _cfg")
