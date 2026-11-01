@@ -1,62 +1,76 @@
-# AstrBot 插件: astrbot_task
+![header](https://capsule-render.vercel.app/api?type=waving&height=150&color=gradient:5B8C8F,8fb8ba&section=header&text=%E6%97%A5%E7%A8%8B%E7%AE%A1%E7%90%86&fontSize=44&fontColor=ffffff)
 
-任务管理 / 长期记忆 / 好感养成 —— Teaskks(Node 版)核心能力的 AstrBot 移植,纯 Python + SQLite,零第三方依赖。
+<img align="right" src="logo.png" width="110">
 
-## 功能
+[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.10+-blue)
+![AstrBot](https://img.shields.io/badge/AstrBot-v4.29.0+-orange)
+![Stars](https://img.shields.io/github/stars/p0TATo-bit/astrbot_task?style=flat&label=Stars)
+![Release](https://img.shields.io/github/v/release/p0TATo-bit/astrbot_task)
 
-- **任务管理**:自然语言创建/列表/完成/删除/**修改**/**批量导入**(LLM 工具自动调用),支持截止日期/时间/优先级/**分类**/循环(daily/weekly/monthly/yearly + recurrence_end);**删除与完成需二次确认**(首次调用只问话, 主人明确回复确认后才执行)
-- **长期记忆**:重要事实/偏好/计划存储与检索(LLM 工具),带重要度与情感标注(intensity/valence)
-- **记忆系统全量**: 扩散激活召回(关键词IDF+多跳+情绪一致性调制) / 同主题升级覆盖 / 后台自动提取(仅重要度≥4) / 每20轮周期总结+事实回灌(第一人称+身份继承+排除规则)
-- **情绪系统全量**: 状态层(愉悦/唤醒/支配/疲惫/挫败: 规则+向基线衰减) + 关系层三条(无上限) + 每轮AI微调(±0.08) + 自然语言情境注入(高段位描述: 突破1/2/4有不同认知)
-- **联网工具**: web_search(Bing解析) + open_url(网页正文)
-- **定时推送体系(v0.3)**: AI定时提醒(set_reminder / write_note / list_notes / read_note / calculate / weather工具, 到点推送) / 临近开始提醒(45分钟窗口+去重) / 过期任务汇总(4小时冷却, 循环母任务不算) / **AI主动关心**(30分钟检查: 时段/每日上限/最小间隔/同主题一次 + 随机触发, 概率随三条好感提升, 附沉默时长) / 每日08:00与周一09:00计划生成推送(循环任务展开成本期实例) / 凌晨3点+启动时数据库自动备份(保留7份) —— 推送目标=配置的 owner_umo 或最近活跃会话, 口吻由人格生成(失败回退模板)
-- **识图(v0.3)**: 消息里的图片自动下载调视觉模型转文字注入对话(需在插件配置填识图 API)
-- **管理模型(v0.5.3)**: 插件内部 LLM 任务(总结/提取/关键词/意图/情绪微调/口吻/计划)统一走配置的 admin_provider_id, 未设置则跟随聊天模型, 故障自动回退
-- **时间冲突检测(v0.6)**: 建/改任务时与已有任务比对时段(循环 vs 单次按星期比对, 尊重学期截止; 结束时间取 end_time 字段或标题区间), 冲突拒绝并报出冲突任务, 主人坚持可 force 越权
-- **技能: 笔记文档**(write_note/list_notes/read_note, WebUI「文档」页查看下载)+ **精确计算**(calculate, ast 白名单求值防注入)+ **天气查询**(weather, Open-Meteo 免费免 Key)
-- **LLM请求注入**: on_llm_request 钩子把[记忆召回]+[情绪情境]+[当前时间]注入 system prompt(两阶段: 先意图调用再多路召回, 9s超时自动降级单路)
-- **好感养成**:信任/任务好感/社交好感三条关系值,**无上限**(满 1 = 羁绊,之后继续累积),随对话规则更新(夸奖/感谢/责备/共情/完成任务/深夜陪伴),高好感会改变人格提示词里的自我认知
-- **当前时间工具**:让 LLM 准确知道"现在几点",相对日期(明天/周三)换算不瞎猜
+# 日程管理 (astrbot_task)
 
-LLM 对话本体由 AstrBot 驱动:请先在 AstrBot 配置好 LLM 提供商(如 NVIDIA API, OpenAI 兼容格式)与人格提示词。
+**任务管理 / 长期记忆 / 情绪陪伴** —— 为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的伴侣管家插件。纯 Python + SQLite,零第三方依赖,29 个 LLM 工具自然语言调用。
+
+她不只是日程表:有长期记忆(会记住你的偏好与约定)、有情绪与好感(三条关系值无上限成长)、能操作网页替你做题、能检索论文、能主动关心你——日常三句话回复,长内容自动整理成文档发给你。
+
+> [!IMPORTANT]
+> 本插件基于较新版本的 AstrBot(v4.29+)开发,推荐使用最新版 AstrBot 以获得最佳体验。
+> 对话本体由 AstrBot 驱动:请先配置好 LLM 提供商(OpenAI 兼容格式)与人格提示词。
+
+## 功能特性
+
+- **任务管理**:自然语言创建/修改/**批量导入课表**/完成/删除,支持循环(daily/weekly/monthly/yearly)、截止时间、优先级、分类;时段**冲突检测**,危险操作需二次确认,支持快照撤销(30 步)
+- **长期记忆**:重要事实/偏好/计划自动存储,扩散激活召回(关键词 IDF + 多跳 + 情绪调制),每 20 轮周期总结回灌,45 天半衰期 + 金环晋升(被想起 5 次进入持久层)
+- **情绪与好感**:PAD 情绪状态 + 三条关系值(无上限,满 1 金色渐变,之后「爱」),随对话自然变化,并注入每轮回复的上下文
+- **手机聊天入口**:内置 selfchat 平台适配器,手机浏览器/PWA 直连机器人,提醒与主动关心推送到手机
+- **网页操作**:无头浏览器代理,替你打开网页、点击、填写、提交并带回结果(可选依赖 playwright)
+- **学术论文检索**:arXiv + OpenAlex 双源,标题/摘要/PDF 链接
+- **替主人做题**:MBTI 等测试检索记忆作依据,逐题作答并计分
+- **知识库读写**:与 AstrBot 原生知识库互通,重要资料可写入供全局检索
+- **长回复自动转文档**:回复超过阈值自动整理成 markdown 文件发送,日常短消息照常
+- **联网与实用工具**:Bing 搜索 / 网页正文读取 / ast 白名单精确计算 / Open-Meteo 天气 / 识图(需配视觉模型)
+- **定时推送体系**:AI 定时提醒 / 临近开始提醒 / 过期汇总 / AI 主动关心(概率随好感) / 每日内容推送 / 计划推送 / 自动备份
 
 ## 安装
 
-1. 将 `astrbot_task` 文件夹复制(或软链)到 AstrBot 的 `data/plugins/` 目录
-2. AstrBot WebUI → 插件管理 → 载入/启用 astrbot_task
-3. 配置 LLM 提供商与人格(AstrBot 面板-人格管理, 插件不内置人设), 即可对话
+1. **插件市场**:AstrBot 面板 → 插件市场 → 搜索「日程管理」
+2. **从文件安装**:下载 Release 或仓库 zip → 面板 → 插件管理 → 从文件安装
+3. 配置 LLM 提供商与人格(AstrBot 面板-人格管理,插件不内置人设),即可对话
 
-数据文件: 存放在 AstrBot 数据根目录的 `astrbot_task_data/`(插件目录之外), 更新/重装插件不影响数据; 自动备份保留最近 7 份。
+数据存放于 `data/plugin_data/astrbot_task/`(数据库/备份/笔记),**更新插件不会丢失数据**。
 
-## 内嵌 WebUI(v0.6: teaskks UI 1:1 复刻)
+## 内嵌 WebUI
 
-- **仪表盘**: 本周日程 7 列周视图(循环展开/课程按标题/打卡/今天高亮)+ 今日重点(下一件事倒计时+逾期区)+ 统计
-- **日历**: 月视图(循环展开), 点击日期看当天任务并可打卡
-- **任务**: 时间分组折叠 + 状态/类型/搜索筛选 + 编辑弹窗(标题/日期/开始与结束时间/优先级/循环/截止)
-- **记忆**: 列表+搜索+添加+**关联图**(力导向 Canvas: 节点大小=有效权重, IDF-Jaccard 连线, 金环★持久层, 拖拽/缩放/详情) + **导出/导入**(JSON/CSV/MD 导出, JSON 去重合并导入)
-- **对话**: 未总结的对话(带标记, 满 20 轮自动总结并沉入记忆) + 已总结存档
-- **情绪**: 状态层+关系层+最近变化日志
-- **监控**: 调用次数与 token 消耗(甜甜圈按用途分布 + 90 天活跃度热力图 + 最近调用明细)
+插件启动后自动开启管理面板(默认 `http://127.0.0.1:6187`):
 
-插件启动后自动开一个本机面板: **http://127.0.0.1:6187** —— 浏览器打开即可管理任务(增/勾/删)、记忆(搜/删)、查看好感条(无上限, 突破1金色)。仅本机可访问; 想手机访问把 `webui_host` 改成 `0.0.0.0`(注意安全)；端口可改 `webui_port`(默认 6187, 避免冲突可改)。
+- **仪表盘 / 日历**:本周 7 天视图 + 月视图,循环任务展开,点击打卡
+- **任务**:时间分组折叠、搜索筛选、编辑弹窗
+- **记忆**:列表(分页)+ 搜索 + 编辑 + 关联图(力导向/同心圆/时间轴三模式,可全屏)+ 导出/导入
+- **对话 / 情绪 / 文档 / 监控**:未总结对话、情绪面板与日志、她写的文档、调用与 token 监控
+- **设置**:20+ 项配置网页直改(推送/人格提醒/回复风格/管理模型/知识库写入等)
+
+手机访问:`webui_host` 改 `0.0.0.0`(注意安全),或启用内置 selfchat 手机入口。
 
 ## 指令
 
-- `/任务 列表` — 查看未完成任务
-- `/任务 添加 <标题> [YYYY-MM-DD] [HH:mm] [P1-5]` — 手动添加
-- `/任务 完成 <编号>` / `/任务 删除 <编号>` — 编号见列表
-- `/任务 好感` — 查看当前好感数值
-- `/任务 模型` — 查看插件管理模型与可用 Provider ID
-- `/任务 撤销 [步数]` — 回退最近的任务变更(快照保留 30 步)
-- `/任务 清空` — 清空全部任务与打卡(可 /任务 撤销 找回)
+- `/任务 列表` / `添加 <标题> [日期] [时间]` / `完成` / `删除 <编号>` — 常规管理
+- `/任务 模型` — 查看管理模型与可用 Provider ID
+- `/任务 撤销 [步数]` — 回退最近变更 / `/任务 清空` — 清空全部(可撤销)
 - `/任务 帮助`
 
-## LLM 工具(自然语言自动调用, 29 个)
+## 29 个 LLM 工具
 
-create_task(循环/循环截止/end_time/分类, 同名去重+时段冲突检测) / create_tasks(课程表批量导入, 最多40) / update_task(修改任务, 冲突检测) / list_tasks / complete_task(循环打卡当天, 整体完成需确认) / delete_task(二次确认) / move_occurrence(单次改期, 只影响那一天) / undo_task_change(撤销最近任务变更, 快照回退) / store_memory / search_memory / current_time / web_search / open_url / set_reminder / take_test(替主人做测试: 检索记忆作依据, 逐题作答+计分) / browser_task(操作网页: 无头浏览器自动点击/填写/提交并返回结果, 可选依赖 playwright) / browser_login(扫码登录: 二维码发给主人, 登录态持久化免登) / search_papers(学术论文检索: arXiv+OpenAlex 双源, 标题/摘要/链接) / kb_write(写入 AstrBot 知识库: 同名覆盖, 需配置目标库名) / write_note / list_notes / read_note(笔记读写) / send_document(长内容发文件) / calculate(精确计算) / weather(天气) / add_quiz / quiz_me / answer_quiz(背诵抽查, 不泄答案) / set_daily_content(每日内容推送)
+create_task / create_tasks(课表批量导入) / update_task / list_tasks / complete_task / delete_task / move_occurrence(单次改期) / undo_task_change(撤销) / store_memory / search_memory / current_time / set_reminder / write_note / list_notes / read_note / send_document(长内容发文件) / calculate / weather / add_quiz / quiz_me / answer_quiz(背诵抽查) / set_daily_content / web_search / open_url / search_papers(论文检索) / take_test(替做题) / browser_task(操作网页) / browser_login(扫码登录) / kb_write(写知识库)
 
-插件内部 LLM 任务(总结/提取/意图/口吻/计划)不走以上工具, 统一走管理模型配置。
+插件内部任务(总结/提取/意图/口吻/计划)统一走「管理模型」配置,不占用以上工具。
 
-## 设计说明
+## 与 Teaskks 的关系
 
-本插件是具有情感与记忆的机器人管家: 任务日程围绕「今天」滚动, 长期记忆由周期总结驱动, 情绪与好感随对话演化——数值不说话, 颜色和名字替它说。
+本插件是 Teaskks(Node 版任务管理)能力的独立移植,数据各自独立;Teaskks 已退役保留,可随时回退。
+
+## License
+
+[MIT](LICENSE) © p67at0
+
+![访客计数](https://count.getloli.com/get/@astrbot_task?theme=moebooru)
