@@ -33,7 +33,7 @@ DB_PATH = os.path.join(_DATA_DIR, "data.db")
 # 兄弟模块必须经 _fresh 导入, 且 main 被导入时统一清一次缓存:
 # AstrBot 重装/重载只清理 data.plugins.<插件名>.* 的托管模块名, 裸名(import scheduler)
 # 的旧字节码会一直留在 sys.modules——曾把旧版坏代码喂给新装版本, 插件加载即崩。
-_SIBLING_MODULES = ("emotion", "memory", "scheduler", "skills", "tasks_core", "webui", "vision", "selfchat")
+_SIBLING_MODULES = ("emotion", "memory", "scheduler", "skills", "tasks_core", "webui", "vision", "selfchat", "webops")
 
 
 def _purge_siblings():
@@ -63,6 +63,11 @@ try:
 except Exception as _sc_err:
     selfchat_mod = None
     logger.warning("[astrbot_task] 自建手机聊天(selfchat)不可用: %s", _sc_err)
+try:
+    webops_mod = _fresh("webops")  # 网页操作(可选: 需要 playwright + chromium)
+except Exception as _wo_err:
+    webops_mod = None
+    logger.info("[astrbot_task] 网页操作(webops)未启用: %s", _wo_err)
 
 WEEKDAY_CN = "日一二三四五六"
 
@@ -353,6 +358,11 @@ class TaskPlugin(Star):
             pass
         try:
             _fresh("webui").stop()
+        except Exception:
+            pass
+        try:
+            if webops_mod:
+                webops_mod.stop()
         except Exception:
             pass
 
@@ -1078,6 +1088,26 @@ class TaskPlugin(Star):
                 "2. 全部答完后, 按该测试的标准计分规则计算各维度, 给出结果类型和两三句解读, 用你的口吻说;\n"
                 "3. 计分规则未知时按最常见规则处理(如 MBTI 每题记一个维度)并注明;\n"
                 "4. 结果若有长期意义(如人格类型), 用 store_memory 记住。")
+
+    @filter.llm_tool(name="browser_task")
+    async def tool_browser_task(self, event: AstrMessageEvent, url: str, goal: str):
+        """操作网页替主人完成任务: 打开网址后自动点击/填写/提交, 做完返回最终结果。
+        适合在线测试做题、网页查询比价、表单提交等多步操作。读纯文字内容用 open_url 更快。
+        注意: 无登录态, 需要登录/验证码的网站做不了。
+
+        Args:
+            url(string): 要操作的网页地址(http/https 开头)
+            goal(string): 要完成的任务描述, 如 "做完整套测试并把结果原样告诉我"
+        """
+        if webops_mod is None or not webops_mod.PLAYWRIGHT_OK:
+            return webops_mod.ENABLE_HINT if webops_mod else "(网页操作模块未加载)"
+        url = (url or "").strip()
+        if not re.match(r"^https?://", url.strip()):
+            return ("url 必须是 http/https 完整网址")
+        goal = (goal or "").strip()
+        if not goal:
+            return ("goal 必填: 描述要完成的任务")
+        return await webops_mod.run_task(url.strip(), goal, self._llm_call)
 
     @filter.llm_tool(name="web_search")
     async def tool_web_search(self, event: AstrMessageEvent, query: str):

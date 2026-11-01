@@ -1,4 +1,4 @@
-﻿# astrbot_task 冒烟测试套件(v0.6.1 起固化入库)
+# astrbot_task 冒烟测试套件(v0.6.1 起固化入库)
 # 跑法: python astrbot_task/tests_smoke.py   (纯标准库, 服务器上也能跑: docker exec astrbot python /AstrBot/data/plugins/astrbot_task/tests_smoke.py)
 # 每次改插件代码后必须全绿再打包发版。新增功能时在对应 section 里补用例。
 import os, sys, json, sqlite3, tempfile, types, asyncio, importlib.util, urllib.request, urllib.parse, datetime
@@ -130,6 +130,14 @@ r = asyncio.run(inst2.tool_take_test(None, "1. 周末你更喜欢? A. 独处 B. 
 must("take_test 题目计数+记忆依据", "2 题" in r and "内向" in r and "逐题作答" in r)
 r2 = asyncio.run(inst2.tool_take_test(None, "短"))
 must("take_test 题目过短", "太短" in r2)
+old_wo = at_main.webops_mod
+class _WoStub:
+    PLAYWRIGHT_OK = False
+    ENABLE_HINT = "(网页操作未启用: 请装 playwright)"
+at_main.webops_mod = _WoStub()  # 模拟模块在但 playwright 没装
+r3 = asyncio.run(inst2.tool_browser_task(None, "http://x.com", "测试"))
+at_main.webops_mod = old_wo
+must("browser_task 未启用降级指引", "未启用" in r3)
 
 # ================= 3. 配置: 迁移与兼容读取 =================
 print("[3] config 迁移与 _cfg")
