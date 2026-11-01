@@ -1,0 +1,100 @@
+%% astrbot_task 架构流程图 (v1.3.4)
+%% draw.io 导入: 菜单 + (插入) → 高级 → Mermaid → 粘贴本文件全部内容
+flowchart TB
+    subgraph CH["消息渠道"]
+        QQ["QQ 官方机器人"]
+        PHONE["手机 PWA selfchat :6188<br>(令牌鉴权 长轮询)"]
+        PANEL["WebUI 管理面板 :6187<br>(任务/记忆/图/设置/监控)"]
+    end
+
+    QQ -->|"用户消息事件"| BUS["AstrBot 事件总线"]
+    PHONE -->|"HTTP POST api/send"| SC["selfchat 适配器<br>历史落 selfchat_msg"]
+    SC -->|"commit_event"| BUS
+
+    BUS --> H1["插件 on_any_message<br>情绪规则+好感 / 对话记录 / 轮次计数"]
+    H1 -->|"满20轮"| SUM["后台周期总结<br>facts 回灌长期记忆"]
+    H1 --> REQ["LLM 请求"]
+
+    subgraph INJ["插件 on_llm_request 临时注入(不改system prompt)"]
+        EMO["情绪上下文"]
+        MEM["相关记忆召回<br>(两阶段 意图规划+多跳)"]
+        PR["人格提醒"]
+        RS["回复风格提示"]
+        TM["当前时间"]
+    end
+    KB["AstrBot 知识库<br>(自动注入 或 Agentic 检索 astr_kb_search)"]
+    REQ --> INJ
+    KB -.-> INJ
+    INJ --> AGENT["LLM 工具循环"]
+
+    subgraph TOOLS["她的 29 个工具(插件注册)"]
+        T1["任务管理 8 个<br>(含单次改期/撤销)"]
+        T2["记忆 2 个 + 时间 1 个"]
+        T3["笔记 4 个(含发文档)"]
+        T4["背诵抽查 3 个"]
+        T5["web_search + open_url"]
+        T6["search_papers<br>arXiv + OpenAlex"]
+        T7["take_test 替做题"]
+        T8["browser_task / browser_login<br>(无头浏览器专用线程)"]
+        T9["calculate + weather"]
+        T10["set_reminder + set_daily_content"]
+        T11["kb_write 写入知识库"]
+    end
+    AGENT --> TOOLS
+    TOOLS -.->|"冲突/展开/快照"| CORE["tasks_core 纯函数"]
+    T8 -.->|"专用线程"| CHR["无头 Chromium<br>看页面→决策→执行≤25步"]
+    CHR -.->|"登录态"| BST["browser_state.json"]
+
+    AGENT --> RESP["LLM 响应"]
+    RESP --> H2["插件 on_llm_response<br>历史配对 + 后台任务投递"]
+    H2 --> SPLT{"插件分段开关?"}
+    SPLT -->|"开"| MULTI["手动分段 ≤4 条"]
+    SPLT -->|"关(推荐)"| NATIVE["AstrBot 原生分段<br>正则切分+随机间隔"]
+    MULTI --> OUT["发送回复"]
+    NATIVE --> OUT
+
+    OUT --> QQ
+    OUT --> SC
+
+    subgraph BG["后台与线程"]
+        SCHED["scheduler 每分钟 tick"]
+        SCHED --> R1["AI 定时提醒"]
+        SCHED --> R2["临近开始 / 过期汇总"]
+        SCHED --> R3["AI 主动关心(随机)"]
+        SCHED --> R4["每日内容推送"]
+        SCHED --> R5["计划推送 / 凌晨备份"]
+        WTHREAD["webops 浏览器线程"]
+        WTHREAD -.-> CHR
+        UTHREAD["webui HTTP 线程"]
+        UTHREAD -.-> PANEL
+        STHREAD["selfchat HTTP 线程"]
+        STHREAD -.-> PHONE
+    end
+    SCHED --> P1["push 双通道"]
+    P1 --> QQ
+    P1 --> PHONE
+
+    subgraph DATA["数据层"]
+        DB[("data.db 插件数据目录<br>tasks / memories / emotion<br>chats / notes / quiz_bank<br>selfchat_msg / 备份")]
+        KBD[("AstrBot 知识库<br>BM25+向量 → 可选 Rerank")]
+    end
+    H1 -.-> DB
+    T1 -.-> DB
+    T3 -.-> DB
+    SC -.-> DB
+    SCHED -.-> DB
+    KB -.-> KBD
+    T11 -.-> KBD
+
+    classDef chan fill:#e8eef7,stroke:#5E82B5,stroke-width:2px
+    classDef pipe fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+    classDef inj fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef tools fill:#fff3e0,stroke:#ef6c00,stroke-width:1.5px
+    classDef bg fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px
+    classDef data fill:#f1f8e9,stroke:#558b2f,stroke-width:2px
+    class QQ,PHONE,PANEL chan
+    class BUS,REQ,AGENT,RESP,OUT pipe
+    class EMO,MEM,PR,RS,TM,KB,KBDB inj
+    class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,CORE,CHR,BST tools
+    class H1,H2,SUM,SPLT,MULTI,NATIVE,SCHED,R1,R2,R3,R4,R5,P1,SC,WTHREAD,UTHREAD,STHREAD bg
+    class DB,KBD data

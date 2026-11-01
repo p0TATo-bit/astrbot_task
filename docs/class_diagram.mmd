@@ -1,0 +1,151 @@
+%% astrbot_task 类图 (v1.3.4, 29 个 LLM 工具)
+%% draw.io 导入: 菜单 + (插入) → 高级 → Mermaid → 粘贴本文件全部内容
+classDiagram
+    direction TB
+
+    class Star {
+        <<AstrBot框架>>
+        +context
+    }
+    class Platform {
+        <<AstrBot框架>>
+        +commit_event(event)
+        +send_by_session(session, chain)
+    }
+    class Context {
+        <<AstrBot框架>>
+        +kb_manager
+        +send_message(umo, chain)
+    }
+
+    class TaskPlugin {
+        <<Star子类_插件主类>>
+        +db_path
+        +emotion
+        +memory
+        +scheduler
+        +_config
+        -_cfg(key) 分组兼容读取
+        -_migrate_config() 扁平迁移
+        -save_config(new_cfg) 落盘
+        -_llm_call(prompt, kind) 管理模型优先
+        -push(text) 双通道推送
+        -persona_notify(kind, facts) 口吻生成
+        -on_llm_request(req) 上下文注入
+        -on_llm_response(resp) 历史配对
+        -on_any_message(event) 记录+轮次
+        -terminate() 停线程与浏览器
+    }
+    class LLM工具集 {
+        <<29个llm_tool>>
+        任务管理8个
+        记忆2个_时间1个
+        笔记4个_含发文档
+        背诵抽查3个
+        搜索2个_论文1个
+        提醒1个_内容推送1个
+        计算天气2个
+        take_test替做题
+        browser_task与login
+        kb_write知识库写入
+    }
+    class MemoryStore {
+        长期记忆_双向前缀去重
+        +upsert_similar(content)
+        +associative_recall(query) 多跳IDF
+        +periodic_summary(umo, convo)
+        +build_graph() 关联图
+        +context_text(recalled)
+        +bump_round(umo) 轮次
+    }
+    class EmotionEngine {
+        PAD情绪_规则好感
+        +get() 状态与关系
+        +on_message(text) 规则微调
+        +apply_adjust(adj) AI校准
+        +build_context() 情绪描述
+    }
+    class Scheduler {
+        每分钟tick_守护线程
+        +start() 启动备份
+        +tick() 六类推送判定
+        -_backup() sqlite备份
+        -_content_push() 每日内容
+    }
+    class tasks_core {
+        <<模块_纯函数>>
+        validate与冲突检测
+        expand_range 循环展开
+        move_occurrence 单次改期
+        toggle_occurrence 打卡
+        snapshot_restore 快照撤销
+    }
+    class skills {
+        <<模块_纯函数>>
+        web_search Bing
+        search_papers arXiv与OpenAlex
+        write_note_read_note 笔记
+        calculate ast白名单
+        weather OpenMeteo
+    }
+    class webui {
+        <<模块_内嵌面板6187>>
+        start_stop 生命周期
+        builtins注册表防僵尸
+        设置页_关联图三模式
+        全屏跟随真实高度
+    }
+    class SelfChatAdapter {
+        <<Platform子类_手机聊天>>
+        +inbound(text) 落库投递
+        +send_by_session() 回复落库
+        +run() HTTP专用服务
+        令牌鉴权_长轮询
+    }
+    class ChatStore {
+        selfchat_msg历史表
+        +add(role, text)
+        +after(id) 长轮询
+        +latest(limit)
+    }
+    class webops {
+        <<模块_无头浏览器代理>>
+        专用线程防跨线程崩溃
+        run_task 看页面决策执行
+        run_login 扫码登录
+        browser_state登录态持久化
+    }
+    class vision {
+        <<模块_识图>>
+        describe_image(url)
+    }
+    class DataDB {
+        <<SQLite_插件数据目录>>
+        tasks与occurrence
+        memories与summaries
+        emotion与chats
+        notes_quiz_bank
+        selfchat_msg
+        notify_proactive日志
+    }
+
+    TaskPlugin --|> Star
+    SelfChatAdapter --|> Platform
+    TaskPlugin *-- MemoryStore
+    TaskPlugin *-- EmotionEngine
+    TaskPlugin *-- Scheduler
+    TaskPlugin ..> LLM工具集 : filter.llm_tool注册
+    TaskPlugin ..> Context : 推送与kb_manager
+    TaskPlugin ..> tasks_core : 冲突展开快照
+    TaskPlugin ..> skills : 搜索论文笔记
+    TaskPlugin ..> webui : 启动内嵌面板
+    TaskPlugin ..> SelfChatAdapter : 导入即注册适配器
+    TaskPlugin ..> webops : browser_task与login
+    TaskPlugin ..> vision : 识图注入
+    SelfChatAdapter ..> TaskPlugin : 事件经总线分发
+    MemoryStore --> DataDB
+    EmotionEngine --> DataDB
+    Scheduler --> DataDB
+    ChatStore --> DataDB
+    SelfChatAdapter *-- ChatStore
+    Scheduler --> TaskPlugin : 回引插件推送
