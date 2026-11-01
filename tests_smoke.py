@@ -15,6 +15,10 @@ sys.modules["astrbot.api.star"].Star = object
 sys.modules["astrbot.api.star"].register = lambda *a, **k: (lambda cls: cls)
 sys.modules["astrbot.api.event"].AstrMessageEvent = object
 sys.modules["astrbot.api.event"].MessageChain = object
+class _FileComp:
+    def __init__(self, name="", file=""): self.name, self.file = name, file
+sys.modules["astrbot.api.message_components"] = types.ModuleType("astrbot.api.message_components")
+sys.modules["astrbot.api.message_components"].File = _FileComp
 class TextPart:
     def __init__(self, text): self.text = text
     def mark_as_temp(self): return self
@@ -113,6 +117,19 @@ must("召回+金环晋升(满5)", row["access_count"] == 5 and row["pinned"] == 
 r2 = ms.upsert_similar("主人在准备考研408, 目标已定", "fact", 5)
 must("双向前缀升级覆盖", r2 and r2.get("upgraded"))
 cx.close()
+
+# ================= 2b. take_test 替做题工具 =================
+print("[2b] take_test")
+inst2 = at_main.TaskPlugin.__new__(at_main.TaskPlugin)
+inst2.memory = ms
+class _EmoStub:
+    def get(self): return ({"P": 0.0}, {})
+inst2.emotion = _EmoStub()
+ms.upsert_similar("主人性格内向, 喜欢安静待着", "preference", 4)
+r = asyncio.run(inst2.tool_take_test(None, "1. 周末你更喜欢? A. 独处 B. 聚会\n2. 面对决定你更依赖? A. 逻辑 B. 感觉", "MBTI 人格测试"))
+must("take_test 题目计数+记忆依据", "2 题" in r and "内向" in r and "逐题作答" in r)
+r2 = asyncio.run(inst2.tool_take_test(None, "短"))
+must("take_test 题目过短", "太短" in r2)
 
 # ================= 3. 配置: 迁移与兼容读取 =================
 print("[3] config 迁移与 _cfg")

@@ -836,13 +836,10 @@ class TaskPlugin(Star):
             items = json.loads((tasks_json or "").strip())
         except Exception:
             return ("tasks_json 不是合法的 JSON 数组")
-            return
         if not isinstance(items, list) or not items:
             return ("tasks_json 必须是非空数组")
-            return
         if len(items) > 40:
             return ("单次最多创建 40 个任务")
-            return
         created, first_err = [], None
         skip_conflict = self._is_confirmed(force)
         self._snap("create_tasks")
@@ -905,7 +902,6 @@ class TaskPlugin(Star):
             ).fetchall()
         if not rows:
             return ("(没有未完成任务)")
-            return
         lines = []
         for r in rows:
             bits = [f"· [#{r['id']}] {r['title']}", f"[{r['due_date'] or '无日期'}{' ' + r['due_time'] if r['due_time'] else ''} P{r['priority']}"]
@@ -949,14 +945,12 @@ class TaskPlugin(Star):
                 (int(task_id),)).fetchone()
         if not row:
             return (f"找不到未完成任务 #{task_id}")
-            return
         want_all = self._is_confirmed(all)
         if row["recurring"] and not want_all:
             today = datetime.date.today().isoformat()
             occ = tasks_core.latest_occurrence_date(dict(row), today)
             if not occ:
                 return (f"「{row['title']}」首次发生是 {row['due_date']}, 今天还没有可打卡的这一次。")
-                return
             with self._conn() as c:
                 already = c.execute(
                     "SELECT 1 FROM task_occurrence_completions WHERE task_id=? AND date=?",
@@ -993,10 +987,8 @@ class TaskPlugin(Star):
                 row = c.execute("SELECT title FROM tasks WHERE id=?", (int(task_id),)).fetchone()
             if not row:
                 return (f"找不到任务 #{task_id}")
-                return
             self._pend_confirm(umo, "delete", task_id, row["title"])
             return (f"确定要删除任务「{row['title']}」吗? 回复确认后执行, 5分钟内有效(回复取消则放弃)。")
-            return
         if not self._pop_confirm(umo, "delete", task_id):
             return ("没有待确认的删除操作, 请先向主人确认后再执行。")
         self._snap("delete")
@@ -1042,14 +1034,50 @@ class TaskPlugin(Star):
         keyword = keyword.strip()
         if not keyword:
             return ("(无关键词)")
-            return
         _, rel = self.emotion.get()
         recalled = self.memory.associative_recall(keyword, mood=0.0, limit=8)
         if not recalled:
             return ("(没有相关记忆)")
-            return
         return ("\n".join(
             f"[{m['memory_type']}|重要度{m['importance']}] {str(m['content'])[:120]}" for m in recalled))
+
+    @filter.llm_tool(name="take_test")
+    async def tool_take_test(self, event: AstrMessageEvent, test_content: str, test_name: str = ""):
+        """替主人做测试/问卷/性格测评(MBTI、心理量表、趣味问答等)。把题目全文传进来,
+        我会检索关于主人的长期记忆作为作答依据, 你再逐题以主人的性格作答并计分。
+        主人给的是链接时, 先用 open_url 取题目文本再调本工具; 取不到就让主人直接粘贴题目。
+
+        Args:
+            test_content(string): 题目全文(主人粘贴的, 或 open_url 取到的文本, 含选项)
+            test_name(string): 测试名称, 如 "MBTI 人格测试"(可留空)
+        """
+        content = (test_content or "").strip()
+        if len(content) < 10:
+            return ("(题目内容太短, 请把完整题目传进来)")
+        if len(content) > 8000:
+            return (f"(题目过长({len(content)}字), 请分批: 一次传 15 题左右, 作答完再传下一批)")
+        qs = re.findall(r"^\s*(?:\d{1,2}[.、．]|[一二三四五六七八九十]{1,3}[、．])\s*\S", content, re.M)
+        seen, facts = set(), []
+        for kw in [test_name.strip(), "性格", "喜好", "习惯", "社交", "情绪"]:
+            if not kw:
+                continue
+            for m in self.memory.associative_recall(kw, mood=0.0, limit=6):
+                key = str(m["content"])[:24]
+                if key not in seen:
+                    seen.add(key)
+                    facts.append(f"- {str(m['content'])[:90]}")
+            if len(facts) >= 15:
+                break
+        mem_block = "\n".join(facts) if facts else "(关于主人的记忆较少: 按常识推断作答, 并注明哪些是猜测)"
+        name = test_name.strip() or "该测试"
+        head = (f"【替主人作答】{name}, 共识别出 {len(qs)} 题" if qs
+                else f"【替主人作答】{name}(未识别出标准题号, 按原文逐题)")
+        return (f"{head}\n\n主人的相关记忆(作答唯一依据, 按主人的性格选, 不要按你的偏好):\n{mem_block}\n\n"
+                "要求:\n"
+                "1. 逐题作答, 每题一行: 题号. 选项 — 一句话理由(点明依据哪条记忆);\n"
+                "2. 全部答完后, 按该测试的标准计分规则计算各维度, 给出结果类型和两三句解读, 用你的口吻说;\n"
+                "3. 计分规则未知时按最常见规则处理(如 MBTI 每题记一个维度)并注明;\n"
+                "4. 结果若有长期意义(如人格类型), 用 store_memory 记住。")
 
     @filter.llm_tool(name="web_search")
     async def tool_web_search(self, event: AstrMessageEvent, query: str):
@@ -1076,7 +1104,6 @@ class TaskPlugin(Star):
         url = url.strip()
         if not re.match(r"^https?://", url):
             return ("url 必须是 http/https 完整网址")
-            return
         try:
             req = urllib.request.Request(url, headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36",
@@ -1090,7 +1117,6 @@ class TaskPlugin(Star):
             text = "\n".join(s.strip() for s in text.split("\n") if s.strip())[:4000]
             if not text:
                 return ("(页面没有可读文本)")
-                return
             return (text + ("\n(内容过长已截断)" if len(text) >= 4000 else ""))
         except Exception as e:
             return (f"打开网页失败: {e}")
@@ -1106,13 +1132,10 @@ class TaskPlugin(Star):
         content = content.strip()
         if not content:
             return ("content 不能为空")
-            return
         if not re.fullmatch(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}", remind_at.strip()):
             return ("remind_at 格式必须是 YYYY-MM-DD HH:mm(相对时间先调用 current_time 换算)")
-            return
         if remind_at.strip() <= datetime.datetime.now().strftime("%Y-%m-%d %H:%M"):
             return ("提醒时间必须在未来")
-            return
         with self._conn() as c:
             c.execute("INSERT INTO ai_reminders (content, remind_at) VALUES (?, ?)", (content, remind_at.strip()))
         return (f"提醒已设置: {remind_at.strip()} — {content}")
