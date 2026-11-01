@@ -266,6 +266,12 @@ d = json.loads(get("/api/summaries?limit=10").read())
 must("总结列表", len(d) == 1 and d[0]["summary"] == "测试总结")
 d = json.loads(get("/api/chats?limit=50").read())
 must("对话接口: 未总结1条", d["pending_count"] == 1 and len(d["pending"]) == 1 and d["pending"][0]["text"] == "你好呀")
+d = json.loads(get('/api/memories?page=1&page_size=5').read())
+must("记忆分页接口", isinstance(d, dict) and d["total"] == 1 and len(d["items"]) == 1 and d["pages"] == 1)
+d = json.loads(get('/api/memories?kw=').read())
+must("记忆接口旧格式兼容", isinstance(d, list))
+d = json.loads(get('/api/notes?page=1&page_size=5').read())
+must("文档分页接口", isinstance(d, dict) and d["total"] == 0 and d["items"] == [])
 
 # 导入: 1条新 + 1条与已有重复(跳过) + 1条更完整(升级) + 1条总结去重
 payload = {"memories": [

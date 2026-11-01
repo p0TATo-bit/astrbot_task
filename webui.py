@@ -259,20 +259,37 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/memories/export"):
             return self._export_memories()
         if self.path.startswith("/api/memories"):
-            kw = self.path.split("kw=")[-1].split("&")[0] if "kw=" in self.path else ""
             import urllib.parse
-            kw = urllib.parse.unquote(kw)
+            qs = dict(p.split("=", 1) for p in self.path.split("?")[-1].split("&") if "=" in p)
+            kw = urllib.parse.unquote(qs.get("kw", ""))
+            page = int(qs.get("page", "0") or 0)
+            page_size = max(1, min(100, int(qs.get("page_size", "20") or 20)))
             with _conn() as c:
-                rows = c.execute(
-                    "SELECT id, content, memory_type, importance, intensity, valence, keywords, access_count, created_at FROM memories "
-                    "WHERE content LIKE ? OR keywords LIKE ? ORDER BY importance DESC, created_at DESC LIMIT 50",
-                    (f"%{kw}%", f"%{kw}%"),
-                ).fetchall()
+                cond = "WHERE content LIKE ? OR keywords LIKE ?"
+                args = (f"%{kw}%", f"%{kw}%")
+                if page > 0:
+                    total = c.execute(f"SELECT COUNT(*) n FROM memories {cond}", args).fetchone()["n"]
+                    rows = c.execute(
+                        f"SELECT id, content, memory_type, importance, intensity, valence, keywords, access_count, created_at FROM memories "
+                        f"{cond} ORDER BY importance DESC, created_at DESC LIMIT ? OFFSET ?",
+                        args + (page_size, (page - 1) * page_size),
+                    ).fetchall()
+                else:
+                    total = -1
+                    rows = c.execute(
+                        f"SELECT id, content, memory_type, importance, intensity, valence, keywords, access_count, created_at FROM memories "
+                        f"{cond} ORDER BY importance DESC, created_at DESC LIMIT 50",
+                        args,
+                    ).fetchall()
             out = []
             for r in rows:
                 d = dict(r)
                 d["keywords"] = json.loads(d["keywords"] or "[]")
                 out.append(d)
+            if page > 0:
+                import math
+                return self._json({"items": out, "total": total, "page": page,
+                                   "pages": max(1, math.ceil(total / page_size))})
             return self._json(out)
         if self.path == "/api/emotion":
             return self._json(_emotion_data())
@@ -288,7 +305,16 @@ class Handler(BaseHTTPRequestHandler):
             if "/api/notes/download" in self.path: action = "download"
             title = urllib.parse.unquote(qs.get("title", ""))
             if action == "list":
-                return self._json(skills_mod.list_notes(_state["db_path"]))
+                all_notes = skills_mod.list_notes(_state["db_path"])
+                if qs.get("page"):
+                    page = max(1, int(qs.get("page", "1") or 1))
+                    page_size = max(1, min(100, int(qs.get("page_size", "20") or 20)))
+                    total = len(all_notes)
+                    import math
+                    return self._json({"items": all_notes[(page - 1) * page_size: page * page_size],
+                                       "total": total, "page": page,
+                                       "pages": max(1, math.ceil(total / page_size))})
+                return self._json(all_notes)
             try:
                 if action == "get":
                     return self._json({"title": title, "content": skills_mod.read_note(_state["db_path"], title)})
@@ -768,8 +794,9 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
             <button class="btn primary" onclick="addMemory()">+ 添加</button>
           </div>
         </div>
-        <input type="text" id="m-kw" placeholder="搜索记忆..." style="width:100%; margin-bottom:10px;" oninput="loadMems(this.value)">
+        <input type="text" id="m-kw" placeholder="搜索记忆..." style="width:100%; margin-bottom:10px;" oninput="memPage = 1; loadMems(this.value, 1)">
         <div id="mem-list"></div>
+        <div id="mem-pager" style="margin-top:10px; display:flex; gap:8px; align-items:center; font-size:13px; color:var(--sub);"></div>
       </div>
     </div>
 
@@ -810,6 +837,7 @@ input, select, textarea { padding:6px 8px; border:1px solid var(--border); borde
           <span class="meta">她写的 markdown 笔记(提纲/整理/模板) · 让她说"存成笔记"就会出现在这里</span>
         </div>
         <div id="docs-list" style="margin-top:8px;"></div>
+        <div id="docs-pager" style="margin-top:10px; display:flex; gap:8px; align-items:center; font-size:13px; color:var(--sub);"></div>
       </div>
       <div class="card" id="doc-view-card" style="display:none;">
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
@@ -936,10 +964,10 @@ function page(p) {
   if (p === 'dash') loadDash();
   if (p === 'calendar') loadCalendar();
   if (p === 'tasks') loadTasks();
-  if (p === 'memories') { loadMems(document.getElementById('m-kw').value); loadGraph(); }
+  if (p === 'memories') { loadMems(document.getElementById('m-kw').value, 1); loadGraph(); }
   if (p === 'chats') loadChats();
   if (p === 'emotion') loadEmo();
-  if (p === 'docs') loadDocs();
+  if (p === 'docs') loadDocs(1);
   if (p === 'settings') loadSettings();
   if (p === 'usage') loadUsage();
 }
@@ -1177,10 +1205,19 @@ async function importMems(input) {
   loadGraph();
 }
 
-async function loadMems(kw) {
-  const list = await api('/api/memories?kw=' + encodeURIComponent(kw || ''));
+let memPage = 1;
+let memCache = [];
+async function loadMems(kw, page) {
+  memPage = page || memPage || 1;
+  const d = await api('/api/memories?kw=' + encodeURIComponent(kw || '') + '&page=' + memPage + '&page_size=20');
+  memCache = d.items || [];
+  const list = memCache;
   const el = document.getElementById('mem-list');
-  if (!list.length) { el.innerHTML = '<div class="empty">暂无记忆(对话满20轮总结 / 说"记住X"会积累)</div>'; return; }
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">' + (memPage > 1 ? '这一页没有内容了' : '暂无记忆(对话满20轮总结 / 说"记住X"会积累)') + '</div>';
+    document.getElementById('mem-pager').innerHTML = memPage > 1 ? pagerHtml(memPage, d.pages, d.total, "loadMems(document.getElementById('m-kw').value, PP)") : '';
+    return;
+  }
   el.innerHTML = list.map(m => `
     <div class="row" style="align-items:flex-start;">
       <span class="tag">${esc(m.memory_type)}</span>
@@ -1190,10 +1227,17 @@ async function loadMems(kw) {
       <button class="btn" onclick="editMem(${m.id})">编辑</button>
       <button class="btn danger" onclick="delMem(${m.id})">删除</button>
     </div>`).join('');
+  document.getElementById('mem-pager').innerHTML = pagerHtml(memPage, d.pages, d.total, "loadMems(document.getElementById('m-kw').value, PP)");
+}
+function pagerHtml(page, pages, total, fn) {
+  if (!pages || pages <= 1) return total >= 0 ? '<span>共 ' + total + ' 条</span>' : '';
+  return '<button class="btn" ' + (page <= 1 ? 'disabled' : 'onclick="' + fn.replace('PP', page - 1) + '"') + '>‹ 上一页</button>' +
+    '<span>第 ' + page + ' / ' + pages + ' 页 · 共 ' + total + ' 条</span>' +
+    '<button class="btn" ' + (page >= pages ? 'disabled' : 'onclick="' + fn.replace('PP', page + 1) + '"') + '>下一页 ›</button>';
 }
 async function editMem(id) {
-  const list = await api('/api/memories?kw=' + encodeURIComponent(document.getElementById('m-kw').value));
-  const t = list.find(x => x.id == id); if (!t) return;
+  const t = memCache.find(x => x.id == id);
+  if (!t) return;
   document.getElementById('mm-id').value = t.id;
   document.getElementById('mm-content').value = t.content;
   document.getElementById('mm-type').value = t.memory_type;
@@ -1477,8 +1521,11 @@ const factsN = s => { try { return (JSON.parse(s.facts_json) || []).length; } ca
 
 /* ===== 文档: 她写的笔记(markdown) ===== */
 let currentDoc = '';
-async function loadDocs() {
-  const list = await api('/api/notes');
+let docPage = 1;
+async function loadDocs(page) {
+  docPage = page || docPage || 1;
+  const d = await api('/api/notes?page=' + docPage + '&page_size=20');
+  const list = d.items || [];
   document.getElementById('docs-list').innerHTML = list.length ? list.map(n => `
     <div class="row">
       <span style="flex:1; font-size:13.5px;">${esc(n.title)}</span>
@@ -1486,7 +1533,8 @@ async function loadDocs() {
       <button class="btn" onclick="viewDoc('${esc(n.title)}')">查看</button>
       <button class="btn" onclick="downloadDoc('${esc(n.title)}')">下载</button>
       <button class="btn danger" onclick="delDoc('${esc(n.title)}')">删除</button>
-    </div>`).join('') : '<div class="empty">还没有文档 — 让她整理点什么, 说"存成笔记"就会出现在这里</div>';
+    </div>`).join('') : '<div class="empty">' + (docPage > 1 ? '这一页没有内容了' : '还没有文档 — 让她整理点什么, 说"存成笔记"就会出现在这里') + '</div>';
+  document.getElementById('docs-pager').innerHTML = pagerHtml(docPage, d.pages, d.total, 'loadDocs(PP)');
 }
 async function viewDoc(t) {
   const d = await api('/api/notes/get?title=' + encodeURIComponent(t));
