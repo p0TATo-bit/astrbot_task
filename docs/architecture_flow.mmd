@@ -1,102 +1,101 @@
-%% astrbot_task 架构流程图 (v1.3.4)
+%% astrbot_task 架构流程图 (v1.3.5) — 重点: 发给大模型的请求组成
 %% draw.io 导入: 菜单 + (插入) → 高级 → Mermaid → 粘贴本文件全部内容
 flowchart TB
     subgraph CH["消息渠道"]
         QQ["QQ 官方机器人"]
-        PHONE["手机 PWA selfchat :6188<br>(令牌鉴权 长轮询)"]
-        PANEL["WebUI 管理面板 :6187<br>(任务/记忆/图/设置/监控)"]
+        PHONE["手机 PWA selfchat :6188 令牌鉴权"]
+        PANEL["WebUI 面板 :6187"]
     end
 
     QQ -->|"用户消息事件"| BUS["AstrBot 事件总线"]
-    PHONE -->|"HTTP POST api/send"| SC["selfchat 适配器<br>历史落 selfchat_msg"]
-    SC -->|"commit_event"| BUS
+    PHONE -->|"HTTP + 令牌"| SC["selfchat 适配器 · 历史落 selfchat_msg"]
+    SC --> BUS
+    BUS --> H1["插件 on_any_message · 情绪规则+好感 · 对话记录 · 轮次计数"]
+    H1 -->|"满 20 轮"| SUM["后台周期总结 → facts 回灌长期记忆"]
+    H1 --> REQ["LLM 请求组装 ★重点"]
 
-    BUS --> H1["插件 on_any_message<br>情绪规则+好感 / 对话记录 / 轮次计数"]
-    H1 -->|"满20轮"| SUM["后台周期总结<br>facts 回灌长期记忆"]
-    H1 --> REQ["LLM 请求"]
-
-    subgraph INJ["插件 on_llm_request 临时注入(不改system prompt)"]
-        EMO["情绪上下文"]
-        MEM["相关记忆召回<br>(两阶段 意图规划+多跳)"]
-        PR["人格提醒"]
-        RS["回复风格提示"]
-        TM["当前时间"]
+    subgraph HERO["发给大模型的请求 —— 由以下部分组成"]
+        direction TB
+        subgraph FRAME["框架层(AstrBot 组装, 插件不改动)"]
+            direction TB
+            F1["① System Prompt · 人格(面板配置, 保 prompt 缓存)"]
+            F2["② 对话历史(最近若干轮)"]
+            F3["③ 工具定义(29 个 llm_tool + astr_kb_search)"]
+            F4["④ 知识库检索段落(BM25+向量 → 可选 Rerank, 最多 5 块)"]
+            F5["⑤ 用户当前消息"]
+        end
+        subgraph INJ["临时注入(on_llm_request · mark_as_temp: 不进历史 / 不破坏缓存)"]
+            direction TB
+            I1["⑥ 情绪上下文(规则+每轮微调+每10轮校准)"]
+            I2["⑦ 相关记忆(两阶段召回 5 条, 45天半衰期)"]
+            I3["⑧ 人格提醒(保持人格口吻, 不切助手腔)"]
+            I4["⑨ 回复风格(至多三句 / 口语化 / 社媒习惯)"]
+            I5["⑩ 当前时间(防日期幻觉)"]
+        end
     end
-    KB["AstrBot 知识库<br>(自动注入 或 Agentic 检索 astr_kb_search)"]
-    REQ --> INJ
-    KB -.-> INJ
-    INJ --> AGENT["LLM 工具循环"]
+    REQ --> HERO
 
-    subgraph TOOLS["她的 29 个工具(插件注册)"]
-        T1["任务管理 8 个<br>(含单次改期/撤销)"]
-        T2["记忆 2 个 + 时间 1 个"]
-        T3["笔记 4 个(含发文档)"]
-        T4["背诵抽查 3 个"]
-        T5["web_search + open_url"]
+    KB[("AstrBot 知识库 pota")]
+    KB -.->|"检索片段"| F4
+    T11["kb_write"] -->|"写入文档"| KB
+
+    AGENT["LLM 工具循环(可多轮)"]
+    HERO --> AGENT
+
+    subgraph TOOLS["29 个工具"]
+        direction LR
+        T1["任务管理 ×8<br>含改期/撤销"]
+        T2["记忆 ×2 · 时间 ×1"]
+        T3["笔记 ×4<br>含 send_document 发文件"]
+        T4["背诵抽查 ×3"]
+        T5["web_search / open_url"]
         T6["search_papers<br>arXiv + OpenAlex"]
         T7["take_test 替做题"]
-        T8["browser_task / browser_login<br>(无头浏览器专用线程)"]
-        T9["calculate + weather"]
-        T10["set_reminder + set_daily_content"]
-        T11["kb_write 写入知识库"]
+        T8["browser_task / browser_login<br>无头浏览器专用线程"]
+        T9["calculate / weather"]
+        T10["set_reminder / set_daily_content"]
     end
     AGENT --> TOOLS
-    TOOLS -.->|"冲突/展开/快照"| CORE["tasks_core 纯函数"]
-    T8 -.->|"专用线程"| CHR["无头 Chromium<br>看页面→决策→执行≤25步"]
-    CHR -.->|"登录态"| BST["browser_state.json"]
+    T8 -.->|"专用线程"| WB["无头 Chromium · 看页面→决策→执行 ≤25 步"]
+    WB -.-> BST[("browser_state.json 登录态")]
+    T8 -.->|"扫码/带登录态操作"| KB
 
-    AGENT --> RESP["LLM 响应"]
-    RESP --> H2["插件 on_llm_response<br>历史配对 + 后台任务投递"]
-    H2 --> SPLT{"插件分段开关?"}
-    SPLT -->|"开"| MULTI["手动分段 ≤4 条"]
-    SPLT -->|"关(推荐)"| NATIVE["AstrBot 原生分段<br>正则切分+随机间隔"]
-    MULTI --> OUT["发送回复"]
-    NATIVE --> OUT
-
+    TOOLS --> RESP["LLM 响应"]
+    RESP --> H2["插件 on_llm_response · 历史配对 + 后台任务"]
+    H2 --> SPLIT["分段发送 · AstrBot 原生正则+随机间隔(插件分段已关)"]
+    SPLIT --> OUT["双通道发送"]
     OUT --> QQ
     OUT --> SC
 
-    subgraph BG["后台与线程"]
-        SCHED["scheduler 每分钟 tick"]
-        SCHED --> R1["AI 定时提醒"]
-        SCHED --> R2["临近开始 / 过期汇总"]
-        SCHED --> R3["AI 主动关心(随机)"]
-        SCHED --> R4["每日内容推送"]
-        SCHED --> R5["计划推送 / 凌晨备份"]
-        WTHREAD["webops 浏览器线程"]
-        WTHREAD -.-> CHR
-        UTHREAD["webui HTTP 线程"]
-        UTHREAD -.-> PANEL
-        STHREAD["selfchat HTTP 线程"]
-        STHREAD -.-> PHONE
-    end
-    SCHED --> P1["push 双通道"]
+    SCHED["scheduler 每分钟 tick"] --> R["AI 定时提醒 / 临近开始 / 过期汇总 / 主动关心 / 每日内容推送 / 计划推送 / 凌晨备份"]
+    R --> P1["push 双通道"]
     P1 --> QQ
-    P1 --> PHONE
+    P1 --> SC
 
-    subgraph DATA["数据层"]
-        DB[("data.db 插件数据目录<br>tasks / memories / emotion<br>chats / notes / quiz_bank<br>selfchat_msg / 备份")]
-        KBD[("AstrBot 知识库<br>BM25+向量 → 可选 Rerank")]
+    subgraph DATA["数据层 data.db(插件数据目录, 更新免疫)"]
+        DB[("tasks · memories · emotion · chats · notes · quiz_bank · selfchat_msg · 备份")]
     end
     H1 <-->|"写记录 / 读情绪状态"| DB
     T1 <-->|"任务增删改查"| DB
     T3 <-->|"笔记写读"| DB
     SC <-->|"历史读写"| DB
     SCHED <-->|"读写任务与日志"| DB
-    DB -->|"记忆召回喂上下文"| MEM
+    DB -->|"记忆召回喂上下文"| I2
     PANEL -->|"展示查询"| DB
-    T11 -->|"写入文档"| KBD
-    KBD -->|"检索片段注入"| KB
 
     classDef chan fill:#e8eef7,stroke:#5E82B5,stroke-width:2px
     classDef pipe fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    classDef inj fill:#fce4ec,stroke:#c2185b,stroke-width:2px
-    classDef tools fill:#fff3e0,stroke:#ef6c00,stroke-width:1.5px
+    classDef hero fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef frame fill:#fff3e0,stroke:#ef6c00,stroke-width:1.5px
+    classDef inj fill:#f9e0ec,stroke:#c2185b,stroke-width:1.5px
+    classDef tools fill:#fff8e1,stroke:#f9a825,stroke-width:1.5px
     classDef bg fill:#e3f2fd,stroke:#1565c0,stroke-width:1.5px
     classDef data fill:#f1f8e9,stroke:#558b2f,stroke-width:2px
     class QQ,PHONE,PANEL chan
     class BUS,REQ,AGENT,RESP,OUT pipe
-    class EMO,MEM,PR,RS,TM,KB,KBDB inj
-    class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,CORE,CHR,BST tools
-    class H1,H2,SUM,SPLT,MULTI,NATIVE,SCHED,R1,R2,R3,R4,R5,P1,SC,WTHREAD,UTHREAD,STHREAD bg
-    class DB,KBD data
+    class HERO hero
+    class F1,F2,F3,F4,F5 frame
+    class I1,I2,I3,I4,I5 inj
+    class T1,T2,T3,T4,T5,T6,T7,T8,T9,T10,T11,TOOLS,WB,BST tools
+    class H1,H2,SUM,SPLIT,SC,SCHED,R,P1 bg
+    class DB,KB,DATA data
