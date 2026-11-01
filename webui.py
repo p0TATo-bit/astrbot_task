@@ -1529,6 +1529,7 @@ const SETTING_FIELDS = [
   { g: 'reply', k: 'persona_reminder', label: '每轮人格提醒(留空=内置, 填关=不注入)', type: 'area' },
   { g: 'reply', k: 'reply_style', label: '回复风格提示(留空=内置默认)', type: 'area' },
   { g: 'admin', k: 'auto_extract_enabled', label: '每轮自动提取记忆(默认关)', type: 'bool' },
+  { g: 'admin', k: 'kb_write_name', label: '知识库写入目标(留空=禁用)', type: 'text' },
   { g: 'admin', k: 'tool_voice_enabled', label: '工具结果口吻播报', type: 'bool' },
 ];
 async function loadSettings() {

@@ -146,6 +146,34 @@ r4 = asyncio.run(inst2.tool_browser_login(None, "http://x.com/login"))
 at_main.webops_mod = old_wo
 must("browser_login 未启用降级指引", "未启用" in r4)
 
+# ================= 2c. kb_write 知识库写入 =================
+print("[2c] kb_write")
+class _FakeDoc:
+    doc_id = "d1"
+    doc_name = "测试.txt"
+class _FakeKB:
+    def __init__(self): self.calls = []
+    async def list_documents(self, search=None): return [_FakeDoc()]
+    async def delete_document(self, doc_id): self.calls.append(("del", doc_id))
+    async def upload_document(self, **kw): self.calls.append(("up", kw)); return "doc"
+class _FakeMgr:
+    def __init__(self, kb): self.kb = kb
+    async def get_kb_by_name(self, name): return self.kb
+class _Ctx2:
+    pass
+fkb = _FakeKB()
+inst2.context = _Ctx2()
+inst2.context.kb_manager = _FakeMgr(fkb)
+inst2._config = {"kb_write_name": "pota"}
+r5 = asyncio.run(inst2.tool_kb_write(None, "测试", "这是一段足够长的测试内容, 用于验证写入知识库的完整流程。"))
+ups = [c for c in fkb.calls if c[0] == "up"]
+dels = [c for c in fkb.calls if c[0] == "del"]
+must("kb_write 同名覆盖+batch10", "已写入" in r5 and len(ups) == 1
+     and ups[0][1].get("batch_size") == 10 and len(dels) == 1)
+must("kb_write 内容太短", "太短" in asyncio.run(inst2.tool_kb_write(None, "t2", "短")))
+inst2._config = {}
+must("kb_write 未配置禁用", "未配置" in asyncio.run(inst2.tool_kb_write(None, "t3", "这是一段足够长的测试内容。")))
+
 # ================= 3. 配置: 迁移与兼容读取 =================
 print("[3] config 迁移与 _cfg")
 inst = at_main.TaskPlugin.__new__(at_main.TaskPlugin)

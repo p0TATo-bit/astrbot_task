@@ -1136,6 +1136,50 @@ class TaskPlugin(Star):
 
         return await webops_mod.run_login(url.strip(), self._llm_call, notify_qr)
 
+    @filter.llm_tool(name="kb_write")
+    async def tool_kb_write(self, event: AstrMessageEvent, title: str, content: str):
+        """把有长期价值的资料写进 AstrBot 知识库(以后检索/对话都能查到)。适用于: 重要结论、
+        整理好的资料、主人明确说"存进知识库/记到知识库"的内容。日常闲聊和临时消息不要用本工具。
+
+        Args:
+            title(string): 文档标题(同名会覆盖旧版本)
+            content(string): 正文全文
+        """
+        name = (self._cfg("kb_write_name") or "").strip()
+        if not name:
+            return ("(未配置目标知识库: 在插件配置 kb_write_name 里填知识库名称后才能写入)")
+        content = (content or "").strip()
+        title = (title or "").strip() or "未命名"
+        if len(content) < 10:
+            return ("(内容太短, 不值得入库)")
+        if len(content) > 30000:
+            return ("(内容超过 3 万字, 请先精简或分段写入)")
+        kb_mgr = getattr(self.context, "kb_manager", None)
+        if kb_mgr is None:
+            return ("(AstrBot 知识库管理器不可用)")
+        try:
+            kb = await kb_mgr.get_kb_by_name(name)
+        except Exception as e:
+            return (f"(查询知识库失败: {e})")
+        if kb is None:
+            return (f"(知识库「{name}」不存在, 请先在面板知识库页创建)")
+        fname = re.sub(r'[\\/:*?"<>|\n\r]', "_", title) + ".txt"
+        try:
+            # 同标题覆盖: 删旧文档再写, 避免重复堆积
+            for doc in await kb.list_documents(search=fname):
+                if getattr(doc, "doc_name", "") == fname:
+                    await kb.delete_document(doc.doc_id)
+                    break
+            doc = await kb.upload_document(
+                file_name=fname,
+                file_content=content.encode("utf-8"),
+                file_type="txt",
+                batch_size=10,  # DashScope text-embedding-v3 单次上限 10, 默认 32 会 400
+            )
+        except Exception as e:
+            return (f"写入知识库失败: {e}")
+        return (f"已写入知识库「{name}」: {fname}(可在面板知识库页查看, 之后检索可查到)")
+
     @filter.llm_tool(name="web_search")
     async def tool_web_search(self, event: AstrMessageEvent, query: str):
         """联网搜索(Bing): 查新闻/资料/实时信息等需要外部信息时用; 结果含链接, 需要详情再用 open_url。
