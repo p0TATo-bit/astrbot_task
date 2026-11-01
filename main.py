@@ -7,6 +7,7 @@ import re
 import sys
 import json
 import time
+import random
 import shutil
 import importlib
 import collections
@@ -81,6 +82,15 @@ _REPLY_STYLE_V2 = ("每次回复至多三句话；简单的回答尽可能保持
 # 每轮人格提醒(通用版): 具体人设请主人在配置里写一句话浓缩版, 效果更佳
 _PERSONA_REMINDER = ("无论回复多短, 始终保持你当前人格的身份、说话口吻与对主人的称呼习惯, "
                      "不要切换成通用AI助手的腔调。")
+# 长回复转文档后的随附语模板(LLM 即兴失败时的回退池, 每次随机挑一条)
+_DOC_LINES = [
+    "整理好了, 详细内容都在文档里。",
+    "喏, 长内容放文档里了, 慢慢看。",
+    "打字太长啦, 给你放文件里了。",
+    "都整理进去了, 你看看对不对。",
+    "文件发你了, 记得看哦。",
+    "怕你看着累, 分成文档给你了。",
+]
 # 手机聊天(selfchat 平台)固定会话: 推送双通道的目标
 _SELFCHAT_UMO = "selfchat:FriendMessage:phone"
 
@@ -646,7 +656,25 @@ class TaskPlugin(Star):
                     try:
                         await self._send_long_doc(umo, reply_text)
                         doc_sent = True
-                        resp.completion_text = "内容有点长, 我整理成文档发给你了~"
+                        # 随附语三态: 35% 沉默(文档本身就是回应) / 管理模型即兴一句 / 失败回退随机模板
+                        if random.random() < 0.35:
+                            resp.completion_text = ""
+                        else:
+                            line = ""
+                            try:
+                                title_hint = reply_text.strip().splitlines()[0][:24]
+                                line = (await self._llm_call(
+                                    f"[系统] 刚把一份长内容整理成文档《{title_hint}》发给主人。\n"
+                                    "只输出一句你此刻会对主人说的话(20 字以内): 自然、口语、贴合人格, 可以叮嘱或打趣, "
+                                    "不要出现引号, 不要出现'文档'两个字。",
+                                    system=self.emotion.build_context() + "\n当前场景: 刚给主人发了一份整理好的长文档。只输出一句话。",
+                                    kind="notify") or "").strip().strip('"\u201c\u201d')
+                            except Exception:
+                                line = ""
+                            if line and len(line) <= 50:
+                                resp.completion_text = line
+                            else:
+                                resp.completion_text = random.choice(_DOC_LINES)
                     except Exception as e:
                         logger.error("[astrbot_task] 长回复转文档失败, 回退消息: %s", e)
                 # 分段发送: 长回复按句子切成多条消息, 模拟真人连发(失败回退整条)
