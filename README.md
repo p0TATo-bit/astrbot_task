@@ -73,4 +73,4 @@ create_task / create_tasks(课表批量导入) / update_task / list_tasks / comp
 
 [MIT](LICENSE) © p67at0
 
-![访客计数](https://count.getloli.com/get/@astrbot_task?theme=moebooru)
+![访客计数](https://count.getloli.com/get/@p67at0-astrbot-task?theme=moebooru)
