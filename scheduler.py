@@ -258,7 +258,7 @@ class Scheduler:
 
             # 6) 备份 + 过期日志清理: 每天 03:00
             if now.strftime("%H:%M") == "03:00":
-                self._backup()
+                await asyncio.to_thread(self._backup)  # sqlite 备份+文件复制不阻塞事件循环
                 cutoff = (now - datetime.timedelta(days=LOG_RETENTION_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
                 for tbl in ("notify_log", "emotion_log", "proactive_logs", "llm_usage", "chats"):
                     c.execute(f"DELETE FROM {tbl} WHERE created_at < ?", (cutoff,))
