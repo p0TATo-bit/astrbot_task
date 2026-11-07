@@ -186,6 +186,19 @@ long_reply = "这是一份很长的整理内容, 需要转成文档发给主人�
 doc_ok = asyncio.run(inst2._send_long_doc("u1", long_reply))
 must("长回复转文档: 写笔记+发文件", doc_ok and len(sent) == 1 and sent[0].chain)
 
+# ---- 2e. 聊天免打扰 + 文件文本提取 ----
+inst2._last_interaction_at = None
+must("chat_active 无记录=False", inst2.chat_active() is False)
+inst2._last_interaction_at = datetime.datetime.now()
+must("chat_active 刚聊过=True", inst2.chat_active() is True)
+inst2._last_interaction_at = datetime.datetime.now() - datetime.timedelta(minutes=30)
+must("chat_active 30分钟前=False", inst2.chat_active(10) is False)
+import tempfile as _tf
+txt_path = _tf.mkdtemp() + "/sample.txt"
+open(txt_path, "w", encoding="utf-8").write("这是PDF解析测试用的文本内容, 需要足够长。" * 3)
+extracted = at_main.skills_mod.extract_text(txt_path, 6000)
+must("extract_text 纯文本", "PDF解析测试" in extracted)
+
 # ================= 3. 配置: 迁移与兼容读取 =================
 print("[3] config 迁移与 _cfg")
 inst = at_main.TaskPlugin.__new__(at_main.TaskPlugin)

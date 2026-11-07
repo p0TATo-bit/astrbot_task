@@ -22,6 +22,13 @@
         "default": "",
         "hint": "留空 = 推送到最近聊天的会话(和她聊过一句就自动锁定)。填 selfchat:FriendMessage:phone = 所有推送只走手机聊天入口"
       },
+      "chat_quiet_minutes": {
+        "description": "聊天免打扰(分钟)",
+        "type": "int",
+        "default": 10,
+        "slider": { "min": 0, "max": 60, "step": 5 },
+        "hint": "主人最近这几分钟内发过消息 = 正在聊天, 各类推送暂停顺延; 到点的定时提醒会改成在她下一条回复里自然带出。0 = 关闭免打扰"
+      },
       "push_also_selfchat": {
         "description": "推送同时发一份到手机聊天",
         "type": "bool",

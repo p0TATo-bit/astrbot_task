@@ -140,6 +140,7 @@ class TaskPlugin(Star):
         self._ai_hist = {}         # umo -> deque(AI回复, 20)
         self._pending_confirmations = {}  # umo -> {"tool","task_id","title","at"} 破坏性操作二次确认(5分钟过期)
         self._pending_quiz = {}  # umo -> {题目原文: {"id":.., "answer":..}} 进行中的抽查
+        self._last_files = {}    # umo -> [{"path","name"}] 主人最近发来的文件(供 read_recent_file 读取)
         # 内嵌 WebUI: 宿主按文件路径加载 main.py, 插件目录不在 sys.path——手动加入后才能 import 兄弟模块
         try:
             webui = _fresh("webui")
@@ -220,21 +221,39 @@ class TaskPlugin(Star):
     def _target_umo(self) -> str:
         return (self._cfg("owner_umo") or "").strip() or self._last_umo or ""
 
+    def chat_active(self, minutes=None) -> bool:
+        """主人最近几分钟内发过消息 = 正在聊天(推送免打扰的判定)"""
+        mins = minutes if minutes is not None else int(self._cfg("chat_quiet_minutes", 10) or 10)
+        if not self._last_interaction_at:
+            return False
+        return (datetime.datetime.now() - self._last_interaction_at).total_seconds() < mins * 60
+
     async def push(self, text: str):
-        """主动推送消息到配置/最近会话; push_also_selfchat 开时同时发一份到手机聊天入口"""
+        """主动推送: 长文本自动转文档发文件(失败回退消息), 短文本照常; 双通道分发"""
+        text = str(text or "")
         umo = self._target_umo()
-        if not umo:
+        doc_mode = self._cfg("auto_doc_enabled", True) and len(text) >= int(self._cfg("auto_doc_len", 300) or 300)
+        targets = []
+        if umo:
+            targets.append(umo)
+        if self._cfg("push_also_selfchat", True) and _SELFCHAT_UMO not in targets:
+            targets.append(_SELFCHAT_UMO)
+        if not targets:
             logger.info("[astrbot_task] 推送跳过: 没有可用的会话目标(先和机器人聊一句即可)")
-        else:
-            try:
-                await self.context.send_message(umo, MessageChain().message(text))
-            except Exception as e:
-                logger.error("[astrbot_task] 推送失败: %s", e)
-        if self._cfg("push_also_selfchat", True) and umo != _SELFCHAT_UMO:
-            try:
-                await self.context.send_message(_SELFCHAT_UMO, MessageChain().message(text))
-            except Exception as e:
-                logger.info("[astrbot_task] 手机聊天未收到推送(selfchat 平台未启用?): %s", e)
+            return
+        for t in targets:
+            sent = False
+            if doc_mode:
+                try:
+                    await self._send_long_doc(t, text)
+                    sent = True
+                except Exception as e:
+                    logger.info("[astrbot_task] 推送转文档失败(%s): %s", t, e)
+            if not sent:
+                try:
+                    await self.context.send_message(t, MessageChain().message(text))
+                except Exception as e:
+                    logger.error("[astrbot_task] 推送失败(%s): %s", t, e)
 
     async def persona_notify(self, kind: str, facts: str, fallback: str) -> str:
         """人格口吻生成(失败回退模板)——提醒/主动关心共用"""
@@ -612,11 +631,22 @@ class TaskPlugin(Star):
         umo = event.unified_msg_origin
         self._last_umo = umo
         self._last_interaction_at = datetime.datetime.now()
+        # 主人发来的文件: 保存到 received/ 供 read_recent_file 阅读(文件消息没有 text, 必须在 text 判断之前)
+        try:
+            files = [c for c in (event.message or []) if type(c).__name__ == "File"]
+            for fcomp in files[:3]:
+                url = getattr(fcomp, "url", None) or getattr(fcomp, "file", None)
+                name = getattr(fcomp, "name", None) or "file"
+                if not url:
+                    continue
+                path = await asyncio.to_thread(self._save_received, url, str(name))
+                self._last_files.setdefault(umo, []).append({"path": path, "name": str(name)})
+                logger.info(f"[astrbot_task] 收到文件: {name} → {path}")
+        except Exception as e:
+            logger.error("[astrbot_task] 文件保存失败: %s", e)
         if not text:
             return
         self.emotion.on_message(text)  # 情绪规则+衰减+好感
-        state, _ = self.emotion.get()
-        self._user_hist.setdefault(umo, collections.deque(maxlen=20)).append(text)
         try:
             with self._conn() as c:
                 c.execute("INSERT INTO chats (umo, role, text) VALUES (?,?,?)", (umo, "user", text[:2000]))
@@ -698,6 +728,25 @@ class TaskPlugin(Star):
                         self._history_text(umo)))
         except Exception as e:
             logger.error("[astrbot_task] 回复后处理失败: %s", e)
+
+    def _save_received(self, url: str, name: str) -> str:
+        """把主人发来的文件保存到 数据目录/received/, 返回本地路径"""
+        d = os.path.join(os.path.dirname(self.db_path), "received")
+        os.makedirs(d, exist_ok=True)
+        safe = re.sub(r'[\\/:*?"<>|]', "_", name or "file") or "file"
+        dest = os.path.join(d, datetime.datetime.now().strftime("%m%d%H%M%S") + "_" + safe)
+        if re.match(r"^https?://", url):
+            import urllib.request
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0"})
+            data = urllib.request.urlopen(req, timeout=30).read()
+            with open(dest, "wb") as f:
+                f.write(data)
+        elif os.path.exists(url):
+            shutil.copyfile(url, dest)
+        else:
+            raise ValueError("文件来源不可用")
+        return dest
 
     async def _send_long_doc(self, umo: str, reply: str) -> bool:
         """长回复自动转文档: 写入笔记存档 + 以文件消息发给主人; 成功返回 True"""
@@ -804,6 +853,20 @@ class TaskPlugin(Star):
             parts = [self.emotion.build_context()]
             if ctx:
                 parts.append(ctx)
+
+            # 该自然带出的提醒: 到点但聊天中未推送的 → 注入让她在本轮回复里顺势提起
+            try:
+                now_hm = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                with self._conn() as c:
+                    rows = c.execute("SELECT content FROM ai_reminders WHERE sent=0 AND remind_at <= ?",
+                                     (now_hm,)).fetchall()
+                if rows:
+                    names = "；".join(str(r["content"])[:40] for r in rows[:3])
+                    parts.append(f"【该自然带出的提醒】主人之前设的提醒到时间了还没说出口: {names}"
+                                 " —— 在这轮回复里用一句自然的话带出来, 不要用列表")
+                    c.execute("UPDATE ai_reminders SET sent=1 WHERE sent=0 AND remind_at <= ?", (now_hm,))
+            except Exception as e:
+                logger.error("[astrbot_task] 提醒注入失败: %s", e)
             parts.append(f"【当前时间】{now_str()} —— 涉及今天/明天/几点等时间推理以此为准, 不要猜测")
             rem = str(self._cfg("persona_reminder", "") or "").strip()
             if rem.lower() in ("off", "no", "关闭", "关"):
@@ -1191,6 +1254,34 @@ class TaskPlugin(Star):
                 logger.warning("[astrbot_task] 二维码图片发送失败: %s", e)
 
         return await webops_mod.run_login(url.strip(), self._llm_call, notify_qr)
+
+    @filter.llm_tool(name="read_recent_file")
+    async def tool_read_recent_file(self, event: AstrMessageEvent, name: str = ""):
+        """读取主人最近发来的文件(txt/md/pdf/docx)的正文内容, 用于总结/讲解/基于文件回答问题。
+        主人发文件后说"看看我发的文件/读一下这个PDF"时调用。
+
+        Args:
+            name(string): 文件名关键词(可留空=读最近一份)
+        """
+        files = self._last_files.get(event.unified_msg_origin) or []
+        pick = None
+        key = (name or "").strip().lower()
+        if key:
+            for f in reversed(files):
+                if key in f["name"].lower():
+                    pick = f
+                    break
+        elif files:
+            pick = files[-1]
+        if not pick:
+            return ("(最近没有收到可读的文件; 主人发文件后说一声即可)")
+        try:
+            text = await asyncio.to_thread(skills_mod.extract_text, pick["path"], 6000)
+        except RuntimeError as e:
+            return (str(e))
+        except Exception as e:
+            return (f"读取失败: {e}")
+        return (f"《{pick['name']}》正文(截断):\n{text}\n\n(基于内容回答主人; 用你的口吻, 不要整段复述)")
 
     @filter.llm_tool(name="kb_write")
     async def tool_kb_write(self, event: AstrMessageEvent, title: str, content: str):

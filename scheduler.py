@@ -177,34 +177,39 @@ class Scheduler:
         if not p._cfg("push_enabled", True):
             return
         now = now_dt()
+        active = p.chat_active()  # 主人正在聊天: 推送免打扰, 提醒转由对话语境带出
+        if active:
+            logger.debug("[astrbot_task] 主人正在聊天, 本轮暂停各类推送")
         with self._conn() as c:
-            # 1) AI 定时提醒
-            for rid, content, at in due_reminders(c, now):
-                text = await p.persona_notify("定时提醒", f"提醒内容: {content}", f"⏰ 你设置的提醒\n{content}")
-                await p.push(text)
-                c.execute("UPDATE ai_reminders SET sent = 1 WHERE id = ?", (rid,))
-                logger.info("[astrbot_task] 定时提醒已发送: %s", content[:40])
+            # 1) AI 定时提醒(聊天中不推送, 留给 on_llm_request 注入语境自然带出)
+            if not active:
+                for rid, content, at in due_reminders(c, now):
+                    text = await p.persona_notify("定时提醒", f"提醒内容: {content}", f"⏰ 你设置的提醒\n{content}")
+                    await p.push(text)
+                    c.execute("UPDATE ai_reminders SET sent = 1 WHERE id = ?", (rid,))
+                    logger.info("[astrbot_task] 定时提醒已发送: %s", content[:40])
 
-            # 2) 临近开始提醒
-            window_min = int(p._cfg("upcoming_minutes", 45))
-            for tid, title, hm in upcoming_tasks(c, now, window_min):
-                key = f"upcoming|{tid}|{today_str()}|{hm}"
-                if self._notified(c, key):
-                    continue
-                left = ""
-                try:
-                    dt = datetime.datetime.strptime(f"{today_str()} {hm}", "%Y-%m-%d %H:%M")
-                    mins = int((dt - now).total_seconds() // 60)
-                    left = f"还有 {mins} 分钟" if mins > 0 else "现在"
-                except Exception:
-                    pass
-                text = await p.persona_notify("临近开始提醒", f"{title} 将于 {hm} 开始({left})",
-                                              f"⏰ {title} 将于 {hm} 开始{('(' + left + ')') if left else ''}")
-                await p.push(text)
-                self._mark(c, key)
+            # 2) 临近开始提醒(聊天中不推送不标记, 安静后窗口内补发)
+            if not active:
+                window_min = int(p._cfg("upcoming_minutes", 45))
+                for tid, title, hm in upcoming_tasks(c, now, window_min):
+                    key = f"upcoming|{tid}|{today_str()}|{hm}"
+                    if self._notified(c, key):
+                        continue
+                    left = ""
+                    try:
+                        dt = datetime.datetime.strptime(f"{today_str()} {hm}", "%Y-%m-%d %H:%M")
+                        mins = int((dt - now).total_seconds() // 60)
+                        left = f"还有 {mins} 分钟" if mins > 0 else "现在"
+                    except Exception:
+                        pass
+                    text = await p.persona_notify("临近开始提醒", f"{title} 将于 {hm} 开始({left})",
+                                                  f"⏰ {title} 将于 {hm} 开始{('(' + left + ')') if left else ''}")
+                    await p.push(text)
+                    self._mark(c, key)
 
-            # 3) 过期任务汇总(每小时一次, 4小时冷却)
-            if self._last_overdue_hour != (now.strftime("%Y%m%d%H")):
+            # 3) 过期任务汇总(每小时一次, 4小时冷却; 聊天中顺延到下个整点再试)
+            if not active and self._last_overdue_hour != (now.strftime("%Y%m%d%H")):
                 self._last_overdue_hour = now.strftime("%Y%m%d%H")
                 od = overdue_tasks(c, now)
                 if od:
@@ -217,8 +222,8 @@ class Scheduler:
                         await p.push(text)
                         self._mark(c, f"overdue|{day4}")
 
-            # 4) 主动关心(每30分钟检查一次; 通过防打扰条件后按概率随机触发, 好感越高概率越高)
-            if p._cfg("proactive_enabled", True):
+            # 4) 主动关心(每30分钟检查一次; 通过防打扰条件后按概率随机触发, 好感越高概率越高; 聊天中顺延)
+            if not active and p._cfg("proactive_enabled", True):
                 slot = now.strftime("%Y%m%d%H") + ("a" if now.minute < 30 else "b")
                 if self._last_proactive != slot:
                     self._last_proactive = slot
@@ -249,11 +254,11 @@ class Scheduler:
                         await p.push(text)
                         c.execute("INSERT INTO proactive_logs (topic) VALUES (?)", (tname,))
 
-            # 5) 计划推送: 每日 08:00 / 周一 09:00
+            # 5) 计划推送: 每日 08:00 / 周一 09:00(聊天中顺延到半小时窗口内)
             hm = now.strftime("%H:%M")
-            if hm == "08:00":
+            if not active and "08:00" <= hm <= "08:29":
                 await self._push_plan(c, now, "daily", f"plan|daily|{today_str()}")
-            if hm == "09:00" and now.weekday() == 0:
+            if not active and "09:00" <= hm <= "09:29" and now.weekday() == 0:
                 await self._push_plan(c, now, "weekly", f"plan|weekly|{today_str()}")
 
             # 6) 备份 + 过期日志清理: 每天 03:00
@@ -263,10 +268,10 @@ class Scheduler:
                 for tbl in ("notify_log", "emotion_log", "proactive_logs", "llm_usage", "chats"):
                     c.execute(f"DELETE FROM {tbl} WHERE created_at < ?", (cutoff,))
 
-            # 7) 每日有意思内容推送: 按话题搜索 → 口吻播报
+            # 7) 每日有意思内容推送: 按话题搜索 → 口吻播报(聊天中顺延到本小时内)
             if p._cfg("content_push_enabled", True):
                 chour = int(p._cfg("content_push_hour", 21))
-                if now.hour == chour and self._last_content_hour != now.strftime("%Y%m%d%H"):
+                if not active and now.hour == chour and self._last_content_hour != now.strftime("%Y%m%d%H"):
                     self._last_content_hour = now.strftime("%Y%m%d%H")
                     key = f"content|{today_str()}"
                     if not self._notified(c, key):

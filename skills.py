@@ -258,3 +258,43 @@ def search_papers(query, source="arxiv", limit=5):
     if not out:
         raise ValueError("没有检索到结果")
     return out
+
+
+def extract_text(path, max_chars=6000):
+    """按扩展名提取文件文本: txt/md/log/csv 直接读(多编码); pdf 用 pypdf(可选依赖); docx 用 zip+XML。超长截断"""
+    import os as _os
+    ext = _os.path.splitext(str(path))[1].lower()
+    if ext in (".txt", ".md", ".log", ".csv"):
+        last_err = None
+        for enc in ("utf-8-sig", "utf-8", "gb18030"):
+            try:
+                return open(path, encoding=enc, errors="strict").read()[:max_chars]
+            except UnicodeDecodeError as e:
+                last_err = e
+        raise ValueError(f"无法识别的文本编码: {last_err}")
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            raise RuntimeError("PDF 解析需要 pypdf: 在 AstrBot 容器里执行 pip install pypdf 后重载插件")
+        reader = PdfReader(path)
+        pages = []
+        for pg in reader.pages[:60]:
+            try:
+                pages.append(pg.extract_text() or "")
+            except Exception:
+                pages.append("")
+        text = "\n".join(pages)
+        if not text.strip():
+            raise ValueError("这个 PDF 没有可提取的文字(可能是扫描件/图片版)")
+        return text[:max_chars]
+    if ext == ".docx":
+        import zipfile
+        with zipfile.ZipFile(path) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+        xml = xml.replace("</w:p>", "\n")
+        text = re.sub(r"<[^>]+>", "", xml)
+        if not text.strip():
+            raise ValueError("这个 docx 没有可提取的文字")
+        return text[:max_chars]
+    raise ValueError(f"暂不支持 {ext or '无扩展名'} 格式(支持 txt/md/csv/pdf/docx)")

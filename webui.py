@@ -1567,6 +1567,7 @@ const SETTING_FIELDS = [
   { g: 'push', k: 'push_also_selfchat', label: '推送同时发到手机聊天', type: 'bool' },
   { g: 'push', k: 'upcoming_minutes', label: '课前提醒提前量(分钟)', type: 'num' },
   { g: 'push', k: 'owner_umo', label: '推送目标 UMO(留空=自动)', type: 'text' },
+  { g: 'push', k: 'chat_quiet_minutes', label: '聊天免打扰(分钟, 0=关)', type: 'num' },
   { g: 'proactive', k: 'proactive_enabled', label: '启用主动关心', type: 'bool' },
   { g: 'proactive', k: 'proactive_random_base', label: '主动关心基础概率(0~1)', type: 'num' },
   { g: 'proactive', k: 'proactive_window_start', label: '允许时段开始(小时)', type: 'num' },
