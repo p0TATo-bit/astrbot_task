@@ -90,7 +90,16 @@ _DOC_LINES = [
     "都整理进去了, 你看看对不对。",
     "文件发你了, 记得看哦。",
     "怕你看着累, 分成文档给你了。",
+    "写在文档里了, 比聊天里清楚。",
+    "详细版给你放文件里, 随时翻。",
+    "东西有点多, 都在文档里躺着呢。",
+    "发你一份文档, 拿着不乱。",
 ]
+# 各类推送的兜底模板池(kind -> [模板...]); 没配的 kind 用调用方传入的 fallback
+_NOTIFY_TEMPLATES = {
+    "主动关心": ["在忙吗? 突然想到你, 就来看一眼。", "冒个泡~ 今天过得怎么样?", "闲下来第一件事就是想到你。"],
+    "每日内容推送": ["今天网上的新鲜事给你捞来了, 都在文档里。", "每日份的网上新鲜事到货, 打开文档慢慢看。"],
+}
 # 手机聊天(selfchat 平台)固定会话: 推送双通道的目标
 _SELFCHAT_UMO = "selfchat:FriendMessage:phone"
 
@@ -141,6 +150,7 @@ class TaskPlugin(Star):
         self._pending_confirmations = {}  # umo -> {"tool","task_id","title","at"} 破坏性操作二次确认(5分钟过期)
         self._pending_quiz = {}  # umo -> {题目原文: {"id":.., "answer":..}} 进行中的抽查
         self._last_files = {}    # umo -> [{"path","name"}] 主人最近发来的文件(供 read_recent_file 读取)
+        self._recent_notify = collections.deque(maxlen=8)  # 最近推送口吻(反重复比对用)
         # 内嵌 WebUI: 宿主按文件路径加载 main.py, 插件目录不在 sys.path——手动加入后才能 import 兄弟模块
         try:
             webui = _fresh("webui")
@@ -256,17 +266,44 @@ class TaskPlugin(Star):
                     logger.error("[astrbot_task] 推送失败(%s): %s", t, e)
 
     async def persona_notify(self, kind: str, facts: str, fallback: str) -> str:
-        """人格口吻生成(失败回退模板)——提醒/主动关心共用"""
+        """人格口吻生成(失败回退模板)——提醒/主动关心共用。
+        反重复三层: 语气骰子(每次随机要求不同语气) + 近期说法注入(别再这样说) + 相似度查重重试"""
         try:
             identity = self.emotion.build_context()
-            text = await self._llm_call(
-                f"[系统通知] {kind}: {facts}\n\n请以你的口吻把这个信息自然地告诉主人(一两句话, 不要复述本提示)。",
-                f"{identity}\n\n提醒类消息: 简短、自然、带一点关心, 不要用列表。",
-                kind="notify")
-            return text.strip() or fallback
+            recent = ""
+            if self._recent_notify:
+                recent = ("\n\n最近你已经说过这些了, 这次换完全不同的说法和开头, 不要再出现相同的句子:\n"
+                          + "\n".join(f"- {t}" for t in list(self._recent_notify)[-4:]))
+            style = random.choice(["温柔体贴一点", "带点小调侃", "直接干脆一点", "撒一点小娇", "认真关切一点", "轻松俏皮一点"])
+            text = (await self._llm_call(
+                f"[系统通知] {kind}: {facts}\n\n请以你的口吻把这个信息自然地告诉主人(一两句话, 不要复述本提示)。"
+                f"\n这次说话的语气: {style}。{recent}",
+                f"{identity}\n\n提醒类消息: 简短、自然、带一点关心, 不要用列表。每次的说法都要有变化。",
+                kind="notify") or "").strip()
+            if not text:
+                raise ValueError("生成结果为空")
+            if self._too_similar(text):
+                retry = (await self._llm_call(
+                    f"[系统通知] {kind}: {facts}\n\n你刚才的说法和之前太像了, 主人会觉得你在复读。"
+                    f"请完全换一种说法和角度再说一次(一两句话)。{recent}",
+                    f"{identity}\n\n提醒类消息: 简短、自然、每次有变化。", kind="notify") or "").strip()
+                if retry:
+                    text = retry
+            self._recent_notify.append(text)
+            return text
         except Exception as e:
-            logger.error("[astrbot_task] %s 口吻生成失败, 用模板: %s", kind, e)
-            return fallback
+            logger.warning("[astrbot_task] %s 口吻生成失败(%s), 用模板: %s", kind, e, fallback)
+            fallback_text = random.choice(_NOTIFY_TEMPLATES.get(kind) or [fallback])
+            self._recent_notify.append(fallback_text)
+            return fallback_text
+
+    def _too_similar(self, text: str) -> bool:
+        """与近期任一推送说法高度相似(粗查: 共同字符占比)"""
+        import difflib
+        t1 = set(text)
+        return any(difflib.SequenceMatcher(None, text, old).ratio() > 0.62 or
+                   len(t1 & set(old)) / max(1, len(t1 | set(old))) > 0.55
+                   for old in self._recent_notify)
 
     # ---------- LLM 调用(走 AstrBot provider) ----------
 

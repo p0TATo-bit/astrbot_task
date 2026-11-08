@@ -199,6 +199,27 @@ open(txt_path, "w", encoding="utf-8").write("这是PDF解析测试用的文本�
 extracted = at_main.skills_mod.extract_text(txt_path, 6000)
 must("extract_text 纯文本", "PDF解析测试" in extracted)
 
+# ---- 2f. 口吻反重复 ----
+class _EmoCtx:
+    def get(self): return ({"P": 0.2}, {})
+    def build_context(self): return "你是希尔薇"
+inst2.emotion = _EmoCtx()
+calls2 = []
+async def fake_llm2(prompt, system=None, **kw):
+    calls2.append(prompt)
+    return "刚刚生成的话术" if len(calls2) == 1 else "完全不一样的全新说法"
+inst2._llm_call = fake_llm2
+import collections as _cq
+inst2._recent_notify = _cq.deque(maxlen=8)
+inst2._recent_notify.append("刚刚生成的话术")
+r9 = asyncio.run(inst2.persona_notify("主动关心", "主人30分钟没动静", "模板回退"))
+must("口吻反重复: 相似即重试换说法", "完全不一样" in r9 and len(calls2) == 2)
+inst2._llm_call = fake_llm2
+r10 = asyncio.run(inst2.persona_notify("主动关心", "主人今天完成了3个任务", "模板回退"))
+must("口吻正常生成并记录", r10 == "完全不一样的全新说法" and list(inst2._recent_notify)[-1] == r10)
+r11 = asyncio.run(inst2.persona_notify("主动关心", "触发异常的调用", "模板回退"))
+must("口吻失败回退模板池", isinstance(r11, str) and r11)
+
 # ================= 3. 配置: 迁移与兼容读取 =================
 print("[3] config 迁移与 _cfg")
 inst = at_main.TaskPlugin.__new__(at_main.TaskPlugin)
